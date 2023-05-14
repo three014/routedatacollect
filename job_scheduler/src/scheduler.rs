@@ -125,23 +125,23 @@ mod job_stats {
             let result = match self.active_jobs.pop() {
                 Some(mut job) => {
                     if self.scheduled_for_deletion.remove(&job.0.id()) {
-                        log::trace!(target: "Job Schedules", "Job was scheduled for deletion, returning error.");
+                        log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job was scheduled for deletion, returning error.");
                         self.available_ids.push(Reverse(job.0.id()));
                         return Err(JobError::ScheduledForDeletion);
                     }
                     if job.0.next_exec_time().is_none() {
-                        log::trace!(target: "Job Schedules", "Job had no more datetimes, is finished, returning error.");
+                        log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job had no more datetimes, is finished, returning error.");
                         self.available_ids.push(Reverse(job.0.id()));
                         return Err(JobError::JobFinished);
                     }
                     let future = job.0.call();
-                    log::trace!(target: "Job Schedules", "Calling job's function, advancing schedule and returning future.");
+                    log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Calling job's function, advancing schedule and returning future.");
                     job.0.advance_schedule();
                     self.active_jobs.push(job);
                     return Ok(future);
                 }
                 None => {
-                    log::trace!(target: "Job Schedules", "No more jobs in the heap, returning error.");
+                    log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "No more jobs in the heap, returning error.");
                     Err(JobError::NoMoreJobs)
                 }
             };
@@ -240,14 +240,14 @@ where
 
                 if let Some(exec_time) = jobs.peek_next() {
                     if *exec_time > now {
-                        log::debug!(target: "Scheduler", "Can't run yet, time is in the future: {:?}.", exec_time);
+                        log::debug!(target: "process_manager_thread", "Can't run yet, time is in the future: {:?}.", exec_time);
                         let diff = exec_time.clone() - now.clone();
 
                         state = ProcessManagerState::Sleep(
                             diff.to_std().unwrap_or(Duration::from_secs(0)),
                         );
                     } else {
-                        log::debug!(target: "Scheduler", "Attempting to exec job.");
+                        log::debug!(target: "process_manager_thread", "Attempting to exec job.");
                         match jobs.try_run_next() {
                             Ok(future) => {
                                 state = ProcessManagerState::Run(future);
@@ -267,7 +267,7 @@ where
 
                 match state {
                     ProcessManagerState::Sleep(duration) => {
-                        log::debug!(target: "Scheduler", "About to sleep for {:?}.", &duration);
+                        log::debug!(target: "process_manager_thread", "About to sleep for {:?}.", &duration);
                         drop(
                             running
                                 .1
@@ -289,7 +289,7 @@ where
                     ProcessManagerState::Pass => (),
                 }
             }
-            log::trace!(target: "Scheduler", "Ending process manager thread.");
+            log::trace!(target: "process_manager_thread", "Ending process manager thread.");
 
             // Cleanup | TODO: Error handling please
             drop(sender);
@@ -305,15 +305,15 @@ where
         if !self.active() {
             return;
         }
-        log::info!(target: "Scheduler", "Stopping service, waiting for all processes to finish.");
+        log::info!(target: "scheduler::Scheduler::stop", "Stopping service, waiting for all processes to finish.");
         self.running.1.notify_one();
         *self.running.0.lock().unwrap() = false;
         if let Some(handle) = self.process_manager.take() {
             if let Err(e) = handle.join() {
-                log::error!(target: "Scheduler", "Unable to join process manager thread during shutdown: {:?}", e);
+                log::error!(target: "scheduler::Scheduler::stop", "Unable to join process manager thread during shutdown: {:?}", e);
             }
         }
-        log::info!(target: "Scheduler", "Stopped.");
+        log::info!(target: "scheduler::Scheduler::stop", "Stopped.");
     }
 
     pub fn active(&self) -> bool {
@@ -330,10 +330,10 @@ where
                 true,
             ),
             Err(mut e) => {
-                log::error!(target: "Scheduler", "{}. Stopped. Will still attempt to add job to schedule.", e.to_string());
+                log::error!(target: "scheduler::Scheduler::add_job", "{}. Service stopped. Will still attempt to add job to schedule.", e.to_string());
                 if let Some(handle) = self.process_manager.take() {
                     if let Err(e) = handle.join() {
-                        log::error!(target: "Scheduler", "Unable to join process manager thread: {:?}", e);
+                        log::error!(target: "scheduler::Scheduler::add_job", "Unable to join process manager thread: {:?}", e);
                     }
                 }
                 (
@@ -356,7 +356,7 @@ where
         let did_an_err_occur = match self.job_stats.lock() {
             Ok(mut jobs) => (jobs.deschedule(id), true),
             Err(e) => {
-                log::error!(target: "Scheduler", "{e}. Scheduler stopped.");
+                log::error!(target: "scheduler::Scheduler::remove_job", "{e}. Service stopped.");
                 (Err(job_stats::DescheduleError::General), false)
             }
         };
