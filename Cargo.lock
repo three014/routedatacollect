@@ -945,8 +945,11 @@ dependencies = [
 name = "route-data-collect"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "cron",
  "env_logger",
  "futures",
+ "job_scheduler",
  "log",
  "prost",
  "prost-build",

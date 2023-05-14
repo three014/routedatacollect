@@ -5,7 +5,7 @@ use cron::{OwnedScheduleIterator, Schedule};
 
 use crate::AsyncFn;
 
-pub type JobResult = Result<(), Box<dyn Error + Send>>;
+pub(crate) type JobResult = Result<(), Box<dyn Error + Send>>;
 
 pub struct Job<T>
 where
