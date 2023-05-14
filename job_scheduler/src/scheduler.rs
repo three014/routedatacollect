@@ -220,7 +220,7 @@ where
 
         // START
         *self.running.0.lock().unwrap() = true;
-        log::info!(target: "Scheduler", "Started.");
+        log::info!(target: "scheduler::Scheduler::start", "Starting service.");
 
         self.process_manager = Some(thread::spawn(move || {
             // Create a new thread and channel.
@@ -279,9 +279,9 @@ where
                         thread::sleep(Duration::from_millis(200));
                     }
                     ProcessManagerState::Run(future) => {
-                        log::info!(target: "Scheduler", "Running job!");
+                        log::info!(target: "process_manager_thread", "Running job!");
                         if let Err(e) = sender.send(future) {
-                            log::error!(target: "Scheduler", "{e}");
+                            log::error!(target: "process_manager_thread", "{e}");
                         } else {
                             sleep.1.notify_one();
                         }
@@ -295,7 +295,7 @@ where
             drop(sender);
             sleep.1.notify_one();
             if let Err(e) = runner_handle.join() {
-                log::error!(target: "Scheduler", "{:?}", e);
+                log::error!(target: "process_manager_thread", "{:?}", e);
             }
             log::trace!(target: "process_manager_thread", "Leaving closure.");
         }));
@@ -314,6 +314,12 @@ where
             }
         }
         log::info!(target: "scheduler::Scheduler::stop", "Stopped.");
+    }
+
+    pub fn restart(&mut self) {
+        log::info!(target: "schedule::Scheduler::restart", "Restarting service.");
+        self.stop();
+        self.start();
     }
 
     pub fn active(&self) -> bool {
@@ -347,7 +353,7 @@ where
             self.stop()
         };
         if self.active() {
-            thread::park()
+            self.running.1.notify_one();
         }
         result.0
     }

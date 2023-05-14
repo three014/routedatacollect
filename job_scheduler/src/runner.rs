@@ -21,16 +21,15 @@ pub fn runner(
         .build()
         .unwrap();
 
-
     let mut handles = VecDeque::new();
-    log::info!(target: "runner", "Started.");
+    log::info!(target: "runner::runner", "Started.");
 
     loop {
         match job_receiver.try_recv() {
             Ok(future) => handles.push_back(rt.spawn(future)),
             Err(TryRecvError::Empty) => {
                 if handles.iter().all(|handle| handle.is_finished()) {
-                    log::debug!(target: "runner", "No active jobs running. Going to sleep.");
+                    log::debug!(target: "runner::runner", "No active jobs running. Going to sleep.");
                     drop(
                         sleep
                             .1
@@ -46,9 +45,20 @@ pub fn runner(
         }
     }
 
-    log::info!(target: "runner", "Reciever disconnected, waiting for current jobs to finish.");
+    log::info!(target: "runner::runner", "Reciever disconnected, waiting for current jobs to finish.");
     rt.block_on(async {
-        futures::future::join_all(handles.into_iter()).await
+        for result in futures::future::join_all(handles.into_iter()).await {
+            match result {
+                Ok(result) => {
+                    if let Err(e) = result {
+                        log::warn!(target: "runner::runner", "{e}.");
+                    }
+                },
+                Err(e) => {
+                    log::error!(target: "runner::runner", "{e}.");
+                }
+            }
+        }
     });
-    log::trace!(target: "runner", "Leaving function.");
+    log::trace!(target: "runner::runner", "Leaving function.");
 }
