@@ -1,11 +1,10 @@
-use std::{error::Error, fmt::Debug};
+use std::fmt::Debug;
 
 use chrono::{DateTime, TimeZone};
 use cron::{OwnedScheduleIterator, Schedule};
 
-use crate::AsyncFn;
+use crate::{AsyncFn, Result};
 
-pub(crate) type JobResult = Result<(), Box<dyn Error + Send>>;
 
 pub struct Job<T>
 where
@@ -78,7 +77,7 @@ impl<T> AsyncFn for Job<T>
 where
     T: TimeZone + Send + Debug,
 {
-    fn call(&self) -> futures::future::BoxFuture<'static, JobResult> {
+    fn call(&self) -> futures::future::BoxFuture<'static, Result> {
         self.command.call()
     }
 }

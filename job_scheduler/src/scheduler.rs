@@ -9,11 +9,11 @@ use chrono::{TimeZone, Utc};
 use cron::Schedule;
 use futures::future::BoxFuture;
 
-use crate::{job::JobResult, runner, AsyncFn};
+use crate::{runner, AsyncFn};
 
 mod job_stats {
     use crate::{
-        job::{Job, JobResult},
+        job::Job,
         AsyncFn,
     };
     use chrono::{DateTime, TimeZone, Utc};
@@ -57,14 +57,7 @@ mod job_stats {
         T: TimeZone + Send + Sync + Debug,
     {
         pub fn new(timezone: T) -> Self {
-            Self {
-                now: None,
-                timezone,
-                highest_id: Some(STARTING_AVAILIABLE_IDS - 1),
-                available_ids: Self::create_min_heap_with_size(STARTING_AVAILIABLE_IDS),
-                active_jobs: BinaryHeap::with_capacity(STARTING_AVAILIABLE_IDS as usize),
-                scheduled_for_deletion: HashSet::new(),
-            }
+            Self::with_capacity(timezone, STARTING_AVAILIABLE_IDS)
         }
 
         pub fn with_capacity(timezone: T, capacity: u32) -> Self {
@@ -73,7 +66,7 @@ mod job_stats {
                 timezone,
                 highest_id: {
                     if capacity > 0 {
-                        Some(capacity)
+                        Some(capacity - 1)
                     } else {
                         None
                     }
@@ -121,7 +114,7 @@ mod job_stats {
             })
         }
 
-        pub fn try_run_next(&mut self) -> Result<BoxFuture<'static, JobResult>, JobError> {
+        pub fn try_run_next(&mut self) -> Result<(u32, BoxFuture<'static, crate::Result>), JobError> {
             let result = match self.active_jobs.pop() {
                 Some(mut job) => {
                     if self.scheduled_for_deletion.remove(&job.0.id()) {
@@ -137,8 +130,9 @@ mod job_stats {
                     let future = job.0.call();
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Calling job's function, advancing schedule and returning future.");
                     job.0.advance_schedule();
+                    let id = job.0.id();
                     self.active_jobs.push(job);
-                    return Ok(future);
+                    return Ok((id, future));
                 }
                 None => {
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "No more jobs in the heap, returning error.");
@@ -166,7 +160,7 @@ mod job_stats {
 
 enum ProcessManagerState {
     Sleep(Duration),
-    Run(BoxFuture<'static, JobResult>),
+    Run((u32, BoxFuture<'static, crate::Result>)),
     Pass,
 }
 
@@ -226,7 +220,7 @@ where
             // Create a new thread and channel.
             // New thread gets receiving channel, curr thread gets sender channel.
             // New thread will hold the tokio async runtime, never -thread- sleep.
-            let (sender, reciever) = mpsc::channel::<BoxFuture<'static, JobResult>>();
+            let (sender, reciever) = mpsc::channel::<(u32, BoxFuture<'static, crate::Result>)>();
             let sleep = Arc::new((Mutex::new(()), Condvar::new()));
             let sleep_for_runner = sleep.clone();
             let runner_handle = thread::spawn(move || {
@@ -249,8 +243,8 @@ where
                     } else {
                         log::debug!(target: "process_manager_thread", "Attempting to exec job.");
                         match jobs.try_run_next() {
-                            Ok(future) => {
-                                state = ProcessManagerState::Run(future);
+                            Ok(job) => {
+                                state = ProcessManagerState::Run(job);
                             }
                             Err(job_stats::JobError::NoMoreJobs) => {}
                             Err(job_stats::JobError::JobFinished) => {}
@@ -278,10 +272,11 @@ where
                         // Wait a little bit after being woken up so main can set `running` if needed.
                         thread::sleep(Duration::from_millis(200));
                     }
-                    ProcessManagerState::Run(future) => {
-                        log::info!(target: "process_manager_thread", "Running job!");
-                        if let Err(e) = sender.send(future) {
-                            log::error!(target: "process_manager_thread", "{e}");
+                    ProcessManagerState::Run(job) => {
+                        log::info!(target: "process_manager_thread", "Running job (id={})!", job.0);
+                        if let Err(e) = sender.send(job) {
+                            log::error!(target: "process_manager_thread", "{e}. Attempting to stop process manager.");
+                            *running.0.lock().unwrap() = false; // Stop loop
                         } else {
                             sleep.1.notify_one();
                         }
@@ -330,46 +325,41 @@ where
     where
         C: AsyncFn + Send + 'static,
     {
-        let result = match self.job_stats.lock() {
+        let (job_id, should_stop_service) = match self.job_stats.lock() {
             Ok(mut jobs) => (
                 jobs.schedule(command, schedule, self.timezone.clone()),
-                true,
+                false,
             ),
             Err(mut e) => {
-                log::error!(target: "scheduler::Scheduler::add_job", "{}. Service stopped. Will still attempt to add job to schedule.", e.to_string());
-                if let Some(handle) = self.process_manager.take() {
-                    if let Err(e) = handle.join() {
-                        log::error!(target: "scheduler::Scheduler::add_job", "Unable to join process manager thread: {:?}", e);
-                    }
-                }
+                log::error!(target: "scheduler::Scheduler::add_job", "{e}. Service stopped. Will still attempt to add job to schedule.");
                 (
                     e.get_mut()
                         .schedule(command, schedule, self.timezone.clone()),
-                    false,
+                    true,
                 )
             }
         };
-        if !result.1 {
+        if should_stop_service {
             self.stop()
         };
         if self.active() {
             self.running.1.notify_one();
         }
-        result.0
+        job_id
     }
 
     pub fn remove_job(&mut self, id: u32) -> Result<(), job_stats::DescheduleError> {
-        let did_an_err_occur = match self.job_stats.lock() {
-            Ok(mut jobs) => (jobs.deschedule(id), true),
+        let (result, should_stop_service) = match self.job_stats.lock() {
+            Ok(mut jobs) => (jobs.deschedule(id), false),
             Err(e) => {
                 log::error!(target: "scheduler::Scheduler::remove_job", "{e}. Service stopped.");
-                (Err(job_stats::DescheduleError::General), false)
+                (Err(job_stats::DescheduleError::General), true)
             }
         };
-        if !did_an_err_occur.1 {
+        if should_stop_service {
             self.stop()
         };
-        did_an_err_occur.0
+        result
     }
 }
 

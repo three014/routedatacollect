@@ -5,13 +5,13 @@ use tonic::{
 };
 
 pub struct GoogleRoutesApiInterceptor {
-    api_key: &'static str,
-    field_mask: &'static str,
+    api_key: String,
+    field_mask: String,
 }
 impl GoogleRoutesApiInterceptor {
     const API_KEY_HEADER: &'static str = "X-Goog-Api-Key";
     const FIELD_MASK_HEADER: &'static str = "X-Goog-FieldMask";
-    pub fn new(api_key: &'static str, field_mask: &'static str) -> impl Interceptor {
+    pub fn new(api_key: String, field_mask: String) -> impl Interceptor {
         GoogleRoutesApiInterceptor {
             api_key,
             field_mask,

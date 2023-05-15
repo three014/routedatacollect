@@ -3,18 +3,17 @@ use crate::server::{
     google::maps::routing::v2::routes_client::RoutesClient, GeneralResult,
 };
 use chrono::Local;
-use futures::future::BoxFuture;
+
 use job_scheduler::scheduler;
-use std::{sync::Arc, time::Duration};
+use std::{time::Duration, io};
 use tonic::{
     codegen::InterceptedService,
-    transport::{channel, Channel},
+    transport::Channel,
 };
 
 mod server;
 
 const SERVER_ADDR: &'static str = "https://routes.googleapis.com:443";
-const API_KEY: &'static str = "AIzaSyBog1xzPe-BJQaK5fkMEUPixqvlnVKtxSw";
 // Note that setting the field mask to * is OK for
 // testing, but discouraged for production.
 // For example, for ComputeRoutes, set the field mask to
@@ -28,6 +27,7 @@ const FIELD_MASK: &'static str =
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> GeneralResult {
     env_logger::init();
+    let api_key = prompt_for_api_key()?;
     let mut scheduler = scheduler::Scheduler::with_timezone(Local);
     let every_day_starting_from_school = "00 15 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
@@ -37,20 +37,31 @@ async fn main() -> GeneralResult {
         .await?;
 
     let channel1 = channel0.clone();
+    let api_key1 = api_key.clone();
     let fut = || async {
-        let mut client: RoutesClient<InterceptedService<Channel, _>> =
+        let mut _client: RoutesClient<InterceptedService<Channel, _>> =
             RoutesClient::with_interceptor(
                 channel1,
-                GoogleRoutesApiInterceptor::new(API_KEY, FIELD_MASK),
+                GoogleRoutesApiInterceptor::new(api_key1, FIELD_MASK.to_owned()),
             );
         
-        let places = cache::WaypointCollection::new();
-
-        Ok::<(), Box<dyn std::error::Error + Send>>(())
+        let _places = cache::WaypointCollection::new();
+        
+        Ok(())
     };
 
+    scheduler.start();
     scheduler.add_job(fut, every_day_starting_from_school);
 
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    scheduler.stop();
 
     Ok(())
+}
+
+fn prompt_for_api_key() -> io::Result<String> {
+    eprintln!("Enter API key here: ");
+    let mut buf = "".to_owned();
+    io::stdin().read_line(&mut buf)?;
+    Ok(buf.trim().to_owned())
 }

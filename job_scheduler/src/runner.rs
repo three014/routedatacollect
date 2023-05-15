@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         mpsc::{Receiver, TryRecvError},
         Arc, Condvar, Mutex,
@@ -7,12 +7,11 @@ use std::{
     time::Duration,
 };
 
-use futures::future::BoxFuture;
-
-use crate::job::JobResult;
+use futures::future::{BoxFuture, Join};
+use tokio::task::JoinHandle;
 
 pub fn runner(
-    job_receiver: Receiver<BoxFuture<'static, JobResult>>,
+    job_receiver: Receiver<(u32, BoxFuture<'static, crate::Result>)>,
     sleep: Arc<(Mutex<()>, Condvar)>,
 ) {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -21,14 +20,24 @@ pub fn runner(
         .build()
         .unwrap();
 
-    let mut handles = VecDeque::new();
+    let mut handles = HashMap::new();
+    let mut _leftover_handles = Vec::new(); // Not sure if this will be needed.
     log::info!(target: "runner::runner", "Started.");
 
     loop {
         match job_receiver.try_recv() {
-            Ok(future) => handles.push_back(rt.spawn(future)),
+            Ok((id, future)) => {
+                if let Some(replaced_handle) = handles.insert(id, rt.spawn(future)) {
+                    _leftover_handles.push((id, replaced_handle));
+                }
+            }
             Err(TryRecvError::Empty) => {
-                if handles.iter().all(|handle| handle.is_finished()) {
+                if handles.values().all(|handle| handle.is_finished())
+                    && _leftover_handles
+                        .iter()
+                        .all(|(_, handle)| handle.is_finished())
+                {
+                    drain_handles(&rt,&mut handles, &mut _leftover_handles);
                     log::debug!(target: "runner::runner", "No active jobs running. Going to sleep.");
                     drop(
                         sleep
@@ -46,19 +55,19 @@ pub fn runner(
     }
 
     log::info!(target: "runner::runner", "Reciever disconnected, waiting for current jobs to finish.");
+    drain_handles(&rt,&mut handles, &mut _leftover_handles);
+    log::trace!(target: "runner::runner", "Leaving function.");
+}
+
+fn drain_handles(rt: &tokio::runtime::Runtime, handles: &mut HashMap<u32, JoinHandle<crate::Result>>, _leftover_handles: &mut Vec<(u32, JoinHandle<crate::Result>)>) {
     rt.block_on(async {
-        for result in futures::future::join_all(handles.into_iter()).await {
-            match result {
-                Ok(result) => {
-                    if let Err(e) = result {
-                        log::warn!(target: "runner::runner", "{e}.");
-                    }
+        for (id, handle) in handles.drain().chain(_leftover_handles.drain(..)) {
+            match handle.await {
+                Ok(result) => if let Err(e) = result {
+                    log::warn!(target: "runner::runner", "Job (id={id}) finished with error: {e}");
                 },
-                Err(e) => {
-                    log::error!(target: "runner::runner", "{e}.");
-                }
+                Err(e) => log::error!(target: "runner::runner", "Error on awaiting job (id={id}): {e}"),
             }
         }
     });
-    log::trace!(target: "runner::runner", "Leaving function.");
 }
