@@ -13,10 +13,8 @@ fn main() {
     let id = s.add_job(
         || async {
             println!("Hello World from async job!");
-            let s = "* * *2das".parse::<Schedule>();
-            let guwah = s.expect_err("asdasda");
-            let e: Result<(), Box<dyn std::error::Error + Send>> = Err(Box::new(guwah));
-            e
+            let _ = "* * *2das".parse::<Schedule>()?;
+            Ok(())
         },
         schedule,
     );
@@ -34,9 +32,19 @@ fn main() {
         },
         "45 * * * * *".parse().unwrap(),
     );
+
+    let mut ids = Vec::new();
+    for i in 0..10 {
+        ids.push(s.add_job(move || async move {
+            println!("This is a print statement from index {} of the loop.", i);
+            let _ = "5".parse::<i32>()?;
+            Ok(())
+        }, "20 * * * * *".parse().unwrap()));
+    }
     thread::sleep(Duration::from_secs(60));
     let _ = s.remove_job(id);
     let _ = s.remove_job(id1);
+    ids.iter().for_each(|id| { let _ = s.remove_job(*id); });
     s.stop();
 
     println!("Hello, world from main!");
