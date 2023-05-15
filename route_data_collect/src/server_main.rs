@@ -5,11 +5,8 @@ use crate::server::{
 use chrono::Local;
 
 use job_scheduler::scheduler;
-use std::{time::Duration, io};
-use tonic::{
-    codegen::InterceptedService,
-    transport::Channel,
-};
+use std::{io, time::Duration};
+use tonic::{codegen::InterceptedService, transport::Channel};
 
 mod server;
 
@@ -44,9 +41,9 @@ async fn main() -> GeneralResult {
                 channel1,
                 GoogleRoutesApiInterceptor::new(api_key1, FIELD_MASK.to_owned()),
             );
-        
+
         let _places = cache::WaypointCollection::new();
-        
+
         Ok(())
     };
 

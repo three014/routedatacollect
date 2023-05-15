@@ -20,7 +20,7 @@ impl GoogleRoutesApiInterceptor {
 }
 impl Interceptor for GoogleRoutesApiInterceptor {
     fn call(&mut self, mut request: Request<()>) -> tonic::Result<Request<()>> {
-        log::info!(target: "api_interceptor", "Intercepting request: {:?}", request);
+        log::info!(target: "api_interceptor::GoogleRoutesApiInterceptor::call", "Intercepting request: {:?}", request);
 
         match self.api_key.parse::<AsciiMetadataValue>() {
             Ok(api_key) => request.metadata_mut().insert(
