@@ -8,7 +8,7 @@ fn main() {
     env_logger::init();
     let mut s = Scheduler::<Local>::with_timezone(Local);
 
-    let schedule: Schedule = "30 * * * * *".parse().unwrap();
+    let schedule = "30 * * * * *".parse().unwrap();
 
     let id = s.add_job(
         || async {
@@ -17,6 +17,7 @@ fn main() {
             Ok(())
         },
         schedule,
+        Some(5),
     );
 
     s.start();
@@ -31,20 +32,22 @@ fn main() {
             panic!();
         },
         "45 * * * * *".parse().unwrap(),
+        Some(1),
     );
 
     let mut ids = Vec::new();
     for i in 0..10 {
-        ids.push(s.add_job(move || async move {
-            println!("This is a print statement from index {} of the loop.", i);
-            let _ = "5".parse::<i32>()?;
-            Ok(())
-        }, "20 * * * * *".parse().unwrap()));
+        ids.push(s.add_job(
+            move || async move {
+                println!("This is a print statement from index {} of the loop.", i);
+                let _ = "5".parse::<i32>()?;
+                Ok(())
+            },
+            "20 * * * * *".parse().unwrap(),
+            Some(2),
+        ));
     }
-    thread::sleep(Duration::from_secs(60));
-    let _ = s.remove_job(id);
-    let _ = s.remove_job(id1);
-    ids.iter().for_each(|id| { let _ = s.remove_job(*id); });
+    thread::sleep(Duration::from_secs(180));
     s.stop();
 
     println!("Hello, world from main!");

@@ -48,7 +48,7 @@ async fn main() -> GeneralResult {
     };
 
     scheduler.start();
-    scheduler.add_job(fut, every_day_starting_from_school);
+    scheduler.add_job(fut, every_day_starting_from_school, None);
 
     tokio::time::sleep(Duration::from_secs(5)).await;
     scheduler.stop();
