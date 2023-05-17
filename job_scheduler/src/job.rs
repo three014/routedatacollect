@@ -1,13 +1,14 @@
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashSet},
+    collections::{BinaryHeap, HashMap},
+    sync::{Arc, RwLock},
 };
 
 use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule;
 use futures::future::BoxFuture;
 
-use crate::{AsyncFn, JobId};
+use crate::{runner::RunningJobs, AsyncFn, JobId};
 
 use self::job_internal::Job;
 mod job_internal {
@@ -44,7 +45,7 @@ mod job_internal {
                 id,
                 next_exec_time: schedule.next(),
                 command: Box::new(command),
-                schedule: schedule.take(limit),
+                schedule: schedule.take(if limit > 0 { limit - 1 } else { limit }),
             }
         }
 
@@ -58,7 +59,7 @@ mod job_internal {
             log::trace!(target: "job::Job::advance_schedule", "Next exec time for {}: {:?}", self.id(), self.next_exec_time);
         }
 
-        pub fn id(&self) -> u32 {
+        pub fn id(&self) -> JobId {
             self.id
         }
     }
@@ -151,7 +152,8 @@ where
     highest_id: Option<JobId>,
     available_ids: BinaryHeap<Reverse<JobId>>,
     active_jobs: BinaryHeap<Reverse<Job<T>>>,
-    scheduled_for_deletion: HashSet<JobId>,
+    scheduled_for_deletion: HashMap<JobId, bool>,
+    running_jobs: Arc<RwLock<RunningJobs>>,
 }
 
 impl<T> JobSchedule<T>
@@ -175,14 +177,34 @@ where
             },
             available_ids: Self::create_min_heap_with_size(capacity),
             active_jobs: BinaryHeap::with_capacity(capacity as usize),
-            scheduled_for_deletion: HashSet::new(),
+            scheduled_for_deletion: HashMap::new(),
+            running_jobs: Arc::new(RwLock::new(RunningJobs::new())),
         }
     }
 
-    pub fn schedule_with_limit<C>(&mut self, command: C, schedule: Schedule, timezone: T, limit: usize) -> JobId
+    pub fn schedule_with_limit<C>(
+        &mut self,
+        command: C,
+        schedule: Schedule,
+        timezone: T,
+        limit: usize,
+    ) -> JobId
     where
         C: AsyncFn + Send + 'static,
     {
+        if let Ok(running_jobs) = self.running_jobs.read() {
+            self.scheduled_for_deletion.retain(|id, was_removed| {
+                let retain;
+                if *was_removed && !running_jobs.contains(id) {
+                    self.available_ids.push(Reverse(*id));
+                    retain = false;
+                } else {
+                    retain = true;
+                }
+                retain
+            });
+        }
+
         let job = Job::with_limit(
             self.available_ids
                 .pop()
@@ -207,7 +229,7 @@ where
         jid
     }
 
-    pub fn schedule<C>(&mut self, command: C, schedule: Schedule, timezone: T) -> JobId 
+    pub fn schedule<C>(&mut self, command: C, schedule: Schedule, timezone: T) -> JobId
     where
         C: AsyncFn + Send + 'static,
     {
@@ -219,7 +241,9 @@ where
     /// Will return the current time if the next job is complete.
     pub fn peek_next(&mut self) -> Option<&DateTime<T>> {
         self.active_jobs.peek()?.0.next_exec_time().or_else(|| {
-            self.now = Some(Utc::now().with_timezone(&self.timezone) - chrono::Duration::milliseconds(500));
+            self.now = Some(
+                Utc::now().with_timezone(&self.timezone) - chrono::Duration::milliseconds(500),
+            );
             self.now.as_ref()
         })
     }
@@ -227,22 +251,26 @@ where
     pub fn try_run_next(&mut self) -> Result<(JobId, BoxFuture<'static, crate::Result>), JobError> {
         let result = match self.active_jobs.pop() {
             Some(mut job) => {
-                if self.scheduled_for_deletion.remove(&job.0.id()) {
+                let id = job.0.id();
+
+                // Jobs that are scheduled for deletion won't make it to the runner
+                if let Some(was_deleted) = self.scheduled_for_deletion.get_mut(&id) {
+                    *was_deleted = true;
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job was scheduled for deletion, returning error.");
-                    self.available_ids.push(Reverse(job.0.id()));
                     return Err(JobError::ScheduledForDeletion);
                 }
                 if job.0.next_exec_time().is_none() {
+                    self.scheduled_for_deletion.insert(id, true);
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job had no more datetimes, is finished, returning error.");
-                    self.available_ids.push(Reverse(job.0.id()));
                     return Err(JobError::JobFinished);
                 }
+
+                // Create the future
                 let future = job.0.call();
                 log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Calling job's function, advancing schedule and returning future.");
                 job.0.advance_schedule();
-                let id = job.0.id();
                 self.active_jobs.push(job);
-                return Ok((id, future));
+                Ok((id, future))
             }
             None => {
                 log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "No more jobs in the heap, returning error.");
@@ -253,20 +281,21 @@ where
     }
 
     pub fn deschedule(&mut self, job_id: JobId) -> Result<(), DescheduleError> {
-        if self.scheduled_for_deletion.insert(job_id) {
+        if !self.scheduled_for_deletion.contains_key(&job_id) {
+            self.scheduled_for_deletion.insert(job_id, false);
             Ok(())
         } else {
             Err(DescheduleError::AlreadyScheduled)
         }
     }
 
+    pub fn running_jobs_report(&self) -> Arc<RwLock<RunningJobs>> {
+        self.running_jobs.clone()
+    }
+
     fn create_min_heap_with_size(size: u32) -> BinaryHeap<Reverse<u32>> {
         let mut min_heap = BinaryHeap::with_capacity(size as usize);
         (0..size).for_each(|num| min_heap.push(Reverse(num)));
         min_heap
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.available_ids.capacity()
     }
 }

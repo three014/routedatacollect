@@ -43,8 +43,8 @@ where
     T: TimeZone + Send + Sync + 'static,
     T::Offset: Send,
 {
-    const MINUTES_IN_AN_HOUR: u64 = 60;
-    const SECONDS_IN_A_MINUTE: u64 = 60;
+    const SECONDS_IN_AN_HOUR: u64 = 3600;
+    const PADDING: u64 = 200;
 
     pub fn with_timezone(timezone: T) -> Self {
         Self {
@@ -63,7 +63,9 @@ where
         let running = self.running.clone();
         let jobs = self.job_stats.clone();
         let timezone = self.timezone.clone();
-        let starting_num_jobs = self.job_stats.lock().unwrap().capacity();
+        let lock = self.job_stats.lock().unwrap();
+        let running_jobs_report = lock.running_jobs_report();
+        drop(lock);
 
         // START
         *self.running.0.lock().unwrap() = true;
@@ -72,20 +74,23 @@ where
         self.process_manager = Some(thread::spawn(move || {
             // Create a new thread and channel.
             // New thread gets receiving channel, curr thread gets sender channel.
-            // New thread will hold the tokio async runtime, never -thread- sleep.
             let (sender, reciever) = mpsc::channel::<(JobId, BoxFuture<'static, crate::Result>)>();
             let sleep = Arc::new((Mutex::new(()), Condvar::new()));
             let sleep_for_runner = sleep.clone();
             let runner_handle = thread::spawn(move || {
-                runner::runner(reciever, sleep_for_runner, starting_num_jobs);
+                runner::runner(
+                    reciever,
+                    sleep_for_runner,
+                    running_jobs_report,
+                );
             });
 
             while *running.0.lock().unwrap() {
                 let mut state = ProcessManagerState::Pass;
-                let now = Utc::now().with_timezone(&timezone);
                 let mut jobs = jobs.lock().unwrap();
 
                 if let Some(exec_time) = jobs.peek_next() {
+                    let now = Utc::now().with_timezone(&timezone);
                     if *exec_time > now {
                         log::debug!(target: "scheduler::process_manager_thread", "Can't run yet, time is in the future: {:?}.", exec_time);
                         let diff = exec_time.clone() - now.clone();
@@ -95,19 +100,15 @@ where
                         );
                     } else {
                         log::debug!(target: "scheduler::process_manager_thread", "Attempting to exec job.");
-                        match jobs.try_run_next() {
-                            Ok(job) => {
-                                state = ProcessManagerState::Run(job);
-                            }
-                            Err(job::JobError::NoMoreJobs) => {}
-                            Err(job::JobError::JobFinished) => {}
-                            Err(job::JobError::ScheduledForDeletion) => {}
+                        if let Ok(job) = jobs.try_run_next() {
+                            state = ProcessManagerState::Run(job);
+                        } else {
+                            log::debug!(target: "scheduler::process_manager_thread", "Couldn't run job.");
                         }
                     }
                 } else {
-                    state = ProcessManagerState::Sleep(Duration::from_secs(
-                        Self::SECONDS_IN_A_MINUTE * Self::MINUTES_IN_AN_HOUR,
-                    ));
+                    state =
+                        ProcessManagerState::Sleep(Duration::from_secs(Self::SECONDS_IN_AN_HOUR));
                 }
 
                 drop(jobs);
@@ -118,12 +119,15 @@ where
                         drop(
                             running
                                 .1
-                                .wait_timeout(running.0.lock().unwrap(), duration + Duration::from_millis(500))
+                                .wait_timeout(
+                                    running.0.lock().unwrap(),
+                                    duration + Duration::from_millis(Self::PADDING),
+                                )
                                 .unwrap()
                                 .0,
                         );
                         // Wait a little bit after being woken up so main can set `running` if needed.
-                        thread::sleep(Duration::from_millis(200));
+                        thread::sleep(Duration::from_millis(Self::PADDING));
                     }
                     ProcessManagerState::Run(job) => {
                         log::info!(target: "scheduler::process_manager_thread", "Running job (id={})!", job.0);
@@ -210,6 +214,8 @@ where
         job_id
     }
 
+    /// Removes a job from the scheduler. Any active executions of this job
+    /// will be allowed to complete, but all future jobs will not execute
     pub fn remove_job(&mut self, id: JobId) -> Result<(), job::DescheduleError> {
         let (result, should_stop_service) = match self.job_stats.lock() {
             Ok(mut jobs) => (jobs.deschedule(id), false),
