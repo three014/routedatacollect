@@ -1,0 +1,5 @@
+services:
+  db:
+    image: redis:7.2-rc2-alpine
+  server:
+    build: ./

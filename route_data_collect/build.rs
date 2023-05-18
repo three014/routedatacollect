@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(false)
         .build_client(true)
         .protoc_arg("--experimental_allow_proto3_optional")
+        //.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
         .compile(
             &[
                 google_dir.join("google/maps/routing/v2/route.proto"),

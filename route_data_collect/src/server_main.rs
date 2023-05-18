@@ -2,7 +2,7 @@ use crate::server::{
     api_interceptor::GoogleRoutesApiInterceptor, cache, get_route,
     google::maps::routing::v2::routes_client::RoutesClient, GeneralResult,
 };
-use chrono::{Local, DateTime, NaiveDate, FixedOffset};
+use chrono::{DateTime, FixedOffset, Local, NaiveDate};
 
 use job_scheduler::scheduler;
 use std::{io, time::Duration};
@@ -28,31 +28,65 @@ async fn main() -> GeneralResult {
     let mut scheduler = scheduler::Scheduler::with_timezone(Local);
     let every_day_starting_from_school = "00 15 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
-    let channel0 = Channel::from_static(SERVER_ADDR)
-        .timeout(Duration::from_secs(2))
+    let source_channel = Channel::from_static(SERVER_ADDR)
+        .timeout(Duration::from_secs(5))
         .connect()
         .await?;
 
-    let channel1 = channel0.clone();
-    let api_key1 = api_key.clone();
+    let channel_job_copy = source_channel.clone();
+    let api_key_job_copy = api_key.clone();
     let fut = || async {
-        let mut _client: RoutesClient<InterceptedService<Channel, _>> =
+        let mut _client: RoutesClient<InterceptedService<_, _>> =
             RoutesClient::with_interceptor(
-                channel1,
-                GoogleRoutesApiInterceptor::new(api_key1, FIELD_MASK.to_owned()),
+                channel_job_copy,
+                GoogleRoutesApiInterceptor::new(api_key_job_copy, FIELD_MASK.to_owned()),
             );
 
-        let _places = cache::WaypointCollection::new();
+        let _places = Box::new(cache::WaypointCollection::new());
+
+        println!("Doing the cool route stuff");
+
+        // Create request from Utsa to Heb
+        // Send request, get response
+        // Serialize into json, save to database
+        // Wait until _:45pm
+
+        // Create request from Martin Opposite Leona to Heb
+        // Send request, get response
+        // Serialize into json, save to database
+        // Wait until ++_:15pm
+
+        // Create request from Randolph Park and Ride to Heb
+        // Send request, get response
+        // Serialize into json, save to database
+        // Wait until _:30pm
+
+        // Create request from Train Tracks at Rittiman to Heb
+        // Send request, get response
+        // Serialize into json, save to database
 
         Ok(())
     };
 
     scheduler.start();
-    let tomorrow = NaiveDate::from_ymd_opt(2023, 5, 18).unwrap().and_hms_opt(13, 0, 0).unwrap();
+    let tomorrow = NaiveDate::from_ymd_opt(2023, 5, 18)
+        .unwrap()
+        .and_hms_opt(13, 0, 0)
+        .unwrap();
     let tomorrow = chrono::TimeZone::from_local_datetime(&Local, &tomorrow).unwrap();
-    scheduler.add_job(fut, every_day_starting_from_school, job_scheduler::Limit::EndDate(tomorrow));
+    scheduler.add_job(
+        fut,
+        every_day_starting_from_school,
+        job_scheduler::Limit::EndDate(tomorrow),
+    );
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async {
+        tokio::signal::ctrl_c().await.expect("Failed to listen to event");
+        let _ = tx.send(());
+    });
+
+    let _ = rx.await;
     scheduler.stop();
 
     Ok(())
