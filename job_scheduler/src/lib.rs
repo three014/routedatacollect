@@ -1,3 +1,4 @@
+use chrono::{TimeZone, DateTime};
 use futures::{future::BoxFuture, Future};
 
 mod job;
@@ -11,6 +12,12 @@ pub type JobId = u32;
 /// An implementation to store async functions as trait objects in structs.
 pub trait AsyncFn {
     fn call(&self) -> BoxFuture<'static, Result>;
+}
+
+pub enum Limit<T: TimeZone + Send + 'static> {
+    None,
+    NumTimes(usize),
+    EndDate(DateTime<T>),
 }
 
 impl<T, F> AsyncFn for T

@@ -182,18 +182,14 @@ where
         &mut self,
         command: C,
         schedule: Schedule,
-        limit_num_execs: Option<usize>,
+        limit_num_execs: crate::Limit<T>,
     ) -> JobId
     where
         C: AsyncFn + Send + 'static,
     {
         let (job_id, should_stop_service) = match self.job_stats.lock() {
             Ok(mut jobs) => (
-                if let Some(limit) = limit_num_execs {
-                    jobs.schedule_with_limit(command, schedule, self.timezone.clone(), limit)
-                } else {
-                    jobs.schedule(command, schedule, self.timezone.clone())
-                },
+                jobs.schedule_with_limit(command, schedule, self.timezone.clone(), limit_num_execs),
                 false,
             ),
             Err(mut e) => {

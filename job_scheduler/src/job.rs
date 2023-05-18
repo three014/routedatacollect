@@ -8,44 +8,54 @@ use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule;
 use futures::future::BoxFuture;
 
-use crate::{runner::RunningJobs, AsyncFn, JobId};
+use crate::{runner::RunningJobs, AsyncFn, JobId, Limit};
 
 use self::job_internal::Job;
 mod job_internal {
-    use std::iter::Take;
-
     use chrono::{DateTime, TimeZone};
-    use cron::{OwnedScheduleIterator, Schedule};
+    use cron::Schedule;
 
-    use crate::{AsyncFn, JobId};
+    use crate::{AsyncFn, JobId, Limit};
 
     pub struct Job<T>
     where
         T: TimeZone + Send,
+        T::Offset: Send,
     {
         id: JobId,
         next_exec_time: Option<DateTime<T>>,
-        schedule: Take<OwnedScheduleIterator<T>>,
+        schedule: Box<dyn Iterator<Item = DateTime<T>> + Send>,
         command: Box<dyn AsyncFn + Send + 'static>,
     }
 
     impl<T> Job<T>
     where
-        T: TimeZone + Send,
+        T: TimeZone + Send + 'static,
+        T::Offset: Send,
     {
         pub fn with_limit<C: AsyncFn + Send + 'static>(
             id: JobId,
             command: C,
             schedule: Schedule,
             timezone: T,
-            limit: usize,
+            limit: Limit<T>,
         ) -> Self {
             let mut schedule = schedule.upcoming_owned(timezone);
             Self {
                 id,
                 next_exec_time: schedule.next(),
                 command: Box::new(command),
-                schedule: schedule.take(if limit > 0 { limit - 1 } else { limit }),
+                schedule: match limit {
+                    Limit::None => Box::new(schedule),
+                    Limit::NumTimes(num_times) => {
+                        Box::new(schedule.take(num_times.checked_sub(1).unwrap_or_default()))
+                    }
+                    Limit::EndDate(end_date) => {
+                        Box::new(schedule.take_while(move |date_time| {
+                            date_time.timestamp() < end_date.timestamp()
+                        }))
+                    }
+                },
             }
         }
 
@@ -67,6 +77,7 @@ mod job_internal {
     impl<T> PartialEq for Job<T>
     where
         T: TimeZone + Send,
+        T::Offset: Send,
     {
         fn eq(&self, other: &Self) -> bool {
             self.id == other.id && self.next_exec_time == other.next_exec_time
@@ -76,6 +87,7 @@ mod job_internal {
     impl<T> PartialOrd for Job<T>
     where
         T: TimeZone + Send,
+        T::Offset: Send,
     {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
             use std::cmp::Ordering::Equal;
@@ -90,17 +102,24 @@ mod job_internal {
     impl<T> AsyncFn for Job<T>
     where
         T: TimeZone + Send,
+        T::Offset: Send,
     {
         fn call(&self) -> futures::future::BoxFuture<'static, crate::Result> {
             self.command.call()
         }
     }
 
-    impl<T> Eq for Job<T> where T: TimeZone + Send {}
+    impl<T> Eq for Job<T>
+    where
+        T: TimeZone + Send,
+        T::Offset: Send,
+    {
+    }
 
     impl<T> Ord for Job<T>
     where
         T: TimeZone + Send,
+        T::Offset: Send,
     {
         /// A job only has two comparable features: its id and
         /// its next execution time. We compare the execution times
@@ -130,7 +149,6 @@ mod job_internal {
 
 const STARTING_AVAILIABLE_IDS: u32 = 16;
 
-#[derive(Debug)]
 pub enum DescheduleError {
     AlreadyScheduled,
     JobDoesNotExist,
@@ -146,6 +164,7 @@ pub enum JobError {
 pub struct JobSchedule<T>
 where
     T: TimeZone + Send + Sync,
+    T::Offset: Send,
 {
     timezone: T,
     now: Option<DateTime<T>>,
@@ -158,7 +177,8 @@ where
 
 impl<T> JobSchedule<T>
 where
-    T: TimeZone + Send + Sync,
+    T: TimeZone + Send + Sync + 'static,
+    T::Offset: Send,
 {
     pub fn new(timezone: T) -> Self {
         Self::with_capacity(timezone, STARTING_AVAILIABLE_IDS)
@@ -187,7 +207,7 @@ where
         command: C,
         schedule: Schedule,
         timezone: T,
-        limit: usize,
+        limit: Limit<T>,
     ) -> JobId
     where
         C: AsyncFn + Send + 'static,
@@ -233,7 +253,7 @@ where
     where
         C: AsyncFn + Send + 'static,
     {
-        self.schedule_with_limit(command, schedule, timezone, std::usize::MAX)
+        self.schedule_with_limit(command, schedule, timezone, Limit::None)
     }
 
     /// Returns the next time that a job should be executed, or

@@ -2,7 +2,7 @@ use crate::server::{
     api_interceptor::GoogleRoutesApiInterceptor, cache, get_route,
     google::maps::routing::v2::routes_client::RoutesClient, GeneralResult,
 };
-use chrono::Local;
+use chrono::{Local, DateTime, NaiveDate, FixedOffset};
 
 use job_scheduler::scheduler;
 use std::{io, time::Duration};
@@ -48,7 +48,9 @@ async fn main() -> GeneralResult {
     };
 
     scheduler.start();
-    scheduler.add_job(fut, every_day_starting_from_school, None);
+    let tomorrow = NaiveDate::from_ymd_opt(2023, 5, 18).unwrap().and_hms_opt(13, 0, 0).unwrap();
+    let tomorrow = chrono::TimeZone::from_local_datetime(&Local, &tomorrow).unwrap();
+    scheduler.add_job(fut, every_day_starting_from_school, job_scheduler::Limit::EndDate(tomorrow));
 
     tokio::time::sleep(Duration::from_secs(5)).await;
     scheduler.stop();
