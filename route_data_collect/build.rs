@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let home_dir = PathBuf::from(env::var("HOME").unwrap());
+    let home_dir = PathBuf::from(env::var("HOME")?);
     let google_dir = home_dir.join("google/googleapis");
 
     tonic_build::configure()

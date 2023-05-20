@@ -24,7 +24,7 @@ const FIELD_MASK: &'static str =
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> GeneralResult {
     env_logger::init();
-    let api_key = prompt_for_api_key()?;
+    let api_key = std::env::var("API_KEY")?;
     let mut scheduler = scheduler::Scheduler::with_timezone(Local);
     let every_day_starting_from_school = "00 15 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 

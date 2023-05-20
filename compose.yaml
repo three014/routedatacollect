@@ -1,5 +1,36 @@
+name: rust-redis
 services:
+  backend:
+    build:
+      context: ./
+      target: development
+    environment:
+      - ADDRESS=0.0.0.0:8000
+      - RUST_LOG=trace
+    networks:
+      - server-side
+    volumes:
+      - ./route_data_collect/src:/code/route_data_collect/src
+      - ./job_scheduler/src:/code/job_scheduler/src
+      - backend-cache:/code/target
+    depends_on:
+      - db
+  
   db:
-    image: redis:7.2-rc2-alpine
-  server:
-    build: ./
+    image: redis:6.2-alpine
+    restart: always
+    networks:
+      - server-side
+    ports:
+      - '6379:6379'
+    command: redis-server --save 600 1 --loglevel warning --requirepass eYVX7EwVmmxKPCDmwMtyKVge8oLd2t81
+    volumes:
+      - db:/data
+
+networks:
+  server-side: {}
+
+volumes:
+  backend-cache: {}     
+  db:
+    driver: local
