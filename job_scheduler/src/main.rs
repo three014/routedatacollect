@@ -10,7 +10,7 @@ fn main() {
 
     let schedule = "30 * * * * *".parse().unwrap();
 
-    let id = s.add_job(
+    let _id = s.add_job(
         || async {
             println!("Hello World from async job!");
             let _ = "* * *2das".parse::<Schedule>()?;
@@ -23,7 +23,7 @@ fn main() {
     s.start();
 
     thread::sleep(Duration::from_secs(60));
-    let id1 = s.add_job(
+    let _id1 = s.add_job(
         || async {
             tokio::time::sleep(Duration::from_secs(5)).await;
             println!("Inside the second async job! (Pretend I'm collecting route data!)");

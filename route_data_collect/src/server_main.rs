@@ -1,8 +1,8 @@
 use crate::server::{
-    api_interceptor::GoogleRoutesApiInterceptor, cache, get_route,
+    api_interceptor::GoogleRoutesApiInterceptor, cache,
     google::maps::routing::v2::routes_client::RoutesClient, GeneralResult,
 };
-use chrono::{DateTime, FixedOffset, Local, NaiveDate};
+use chrono::{Local, NaiveDate};
 
 use job_scheduler::scheduler;
 use std::{io, time::Duration};
