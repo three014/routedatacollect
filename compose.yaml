@@ -5,12 +5,17 @@ services:
       context: ./
       target: development
     environment:
-      - ADDRESS=0.0.0.0:8000
+      - REDIS_HOST=db
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=eYVX7EwVmmxKPCDmwMtyKVge8oLd2t81
       - RUST_LOG=trace
+    env_file:
+      - ./route_data_collect/api.env
     networks:
       - server-side
     volumes:
       - ./route_data_collect/src:/code/route_data_collect/src
+      - ./route_data_collect/google_protos:/code/route_data_collect/google_protos
       - ./job_scheduler/src:/code/job_scheduler/src
       - backend-cache:/code/target
     depends_on:

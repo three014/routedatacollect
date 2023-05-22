@@ -93,8 +93,8 @@ mod job_internal {
             use std::cmp::Ordering::Equal;
 
             match self.next_exec_time.partial_cmp(&other.next_exec_time) {
-                Some(Equal) => return self.id.partial_cmp(&other.id),
-                cmp => return cmp,
+                Some(Equal) => self.id.partial_cmp(&other.id),
+                cmp => cmp,
             }
         }
     }
@@ -136,12 +136,10 @@ mod job_internal {
                     .unwrap()
             } else if self.next_exec_time.is_none() && other.next_exec_time.is_none() {
                 self.id.cmp(&other.id)
+            } else if self.next_exec_time.is_some() {
+                Ordering::Greater
             } else {
-                if self.next_exec_time.is_some() {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
+                Ordering::Less
             }
         }
     }
@@ -214,14 +212,12 @@ where
     {
         if let Ok(running_jobs) = self.running_jobs.read() {
             self.scheduled_for_deletion.retain(|id, was_removed| {
-                let retain;
                 if *was_removed && !running_jobs.contains(id) {
                     self.available_ids.push(Reverse(*id));
-                    retain = false;
+                    false
                 } else {
-                    retain = true;
+                    true
                 }
-                retain
             });
         }
 
@@ -301,8 +297,10 @@ where
     }
 
     pub fn deschedule(&mut self, job_id: JobId) -> Result<(), DescheduleError> {
-        if !self.scheduled_for_deletion.contains_key(&job_id) {
-            self.scheduled_for_deletion.insert(job_id, false);
+        if let std::collections::hash_map::Entry::Vacant(e) =
+            self.scheduled_for_deletion.entry(job_id)
+        {
+            e.insert(false);
             Ok(())
         } else {
             Err(DescheduleError::AlreadyScheduled)

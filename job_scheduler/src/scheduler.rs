@@ -38,6 +38,12 @@ impl Scheduler<Utc> {
     }
 }
 
+impl Default for Scheduler<Utc> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Scheduler<T>
 where
     T: TimeZone + Send + Sync + 'static,

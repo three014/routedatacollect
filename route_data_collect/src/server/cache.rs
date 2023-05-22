@@ -32,7 +32,7 @@ impl WaypointCollection {
                 ..Default::default()
             },
             martin_opposite_leona: Waypoint {
-                location_type: Some(LocationType::PlaceId("ChIJ3ayu3UtfXIYRqXtAsRt".to_owned())),
+                location_type: Some(LocationType::PlaceId("ChIJ3ayu3UtfXIYRqXtAsRt-ZA8".to_owned())),
                 ..Default::default()
             },
             via_centro_plaza: Waypoint {
@@ -106,5 +106,29 @@ impl WaypointCollection {
 
     pub fn fm78_heb(&self) -> &Waypoint {
         &self.fm78_heb
+    }
+
+    pub fn crossroads_park_and_ride(&self) -> &Waypoint {
+        &self.crossroads_park_and_ride
+    }
+
+    pub fn martin_opposite_leona(&self) -> &Waypoint {
+        &self.martin_opposite_leona
+    }
+
+    pub fn via_centro_plaza(&self) -> &Waypoint {
+        &self.via_centro_plaza
+    }
+
+    pub fn grand_hyatt(&self) -> &Waypoint {
+        &self.grand_hyatt
+    }
+
+    pub fn walzem_and_mordred(&self) -> &Waypoint {
+        &self.walzem_and_mordred
+    }
+
+    pub fn midcrown_ed_white(&self) -> &Waypoint {
+        &self.midcrown_ed_white
     }
 }

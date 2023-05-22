@@ -9,7 +9,6 @@ COPY Cargo.toml /code/Cargo.toml
 COPY . /code
 ARG PB_REL="https://github.com/protocolbuffers/protobuf/releases"
 RUN curl -LO $PB_REL/download/v3.15.8/protoc-3.15.8-linux-x86_64.zip && unzip protoc-3.15.8-linux-x86_64.zip -d /usr/local && chmod a+x /usr/local/bin/protoc
-ENV API_KEY="------------------"
 RUN cargo fetch
 
 FROM base AS development

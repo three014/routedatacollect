@@ -11,16 +11,17 @@ pub struct GoogleRoutesApiInterceptor {
 impl GoogleRoutesApiInterceptor {
     const API_KEY_HEADER: &'static str = "X-Goog-Api-Key";
     const FIELD_MASK_HEADER: &'static str = "X-Goog-FieldMask";
-    pub fn new(api_key: String, field_mask: String) -> impl Interceptor {
+    pub fn new(api_key: String, field_mask: String) -> Self {
         GoogleRoutesApiInterceptor {
             api_key,
             field_mask,
         }
     }
 }
+
 impl Interceptor for GoogleRoutesApiInterceptor {
     fn call(&mut self, mut request: Request<()>) -> tonic::Result<Request<()>> {
-        log::info!(target: "api_interceptor::GoogleRoutesApiInterceptor::call", "Intercepting request: {:?}", request);
+        log::debug!(target: "api_interceptor::GoogleRoutesApiInterceptor::call", "Intercepting request: {:?}", request);
 
         match self.api_key.parse::<AsciiMetadataValue>() {
             Ok(api_key) => request.metadata_mut().insert(
