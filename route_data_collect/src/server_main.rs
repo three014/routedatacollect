@@ -2,9 +2,10 @@ use crate::server::{
     api_interceptor::GoogleRoutesApiInterceptor, cache,
     google::maps::routing::v2::routes_client::RoutesClient, GeneralResult,
 };
-use chrono::{Local, NaiveDate};
+use chrono::{Local, NaiveDate, Utc};
 
 use job_scheduler::scheduler;
+use redis::JsonAsyncCommands;
 use std::time::Duration;
 use tonic::{codegen::InterceptedService, transport::Channel};
 
@@ -16,7 +17,7 @@ const SERVER_ADDR: &str = "https://routes.googleapis.com:443";
 // For example, for ComputeRoutes, set the field mask to
 // "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline"
 // in order to get the route distances, durations, and encoded polylines.
-const FIELD_MASK: &str = "routes.distanceMeters,routes.duration,routes.staticDuration,routes.legs";
+const FIELD_MASK: &str = "routes.distanceMeters,routes.duration,routes.staticDuration";
 //const FIELD_MASK: &str = "*";
 
 /// Entry point to the server. Configure database and google api connections, start schedule
@@ -25,32 +26,33 @@ const FIELD_MASK: &str = "routes.distanceMeters,routes.duration,routes.staticDur
 async fn main() -> GeneralResult {
     env_logger::init();
     let api_key = std::env::var("API_KEY")?;
-    let mut scheduler = scheduler::Scheduler::with_timezone(Local);
+    let mut scheduler = scheduler::Scheduler::new();
     let every_day_starting_from_school = "00 15 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
-    //let redis = redis::Client::open("redis://db")?;
-    //let mut con = redis.get_async_connection().await?;
-
-    log::debug!("Connected to redis.");
-
+    let redis = redis::Client::open("redis://db")?;
     let google_routes = Channel::from_static(SERVER_ADDR)
         .timeout(Duration::from_secs(5))
         .connect()
         .await?;
 
     log::debug!("Connected to Google Routes API.");
-
-    let routes_job_copy = google_routes.clone();
-    let api_key_job_copy = api_key.clone();
-    let fut = || async {
-        use crate::server::google::maps::routing::v2::{
-            ComputeRoutesRequest, RouteTravelMode, RoutingPreference, Units
+    
+    let job_redis = redis.clone();
+    let fut = move || async move {
+        use crate::server::{
+            google::maps::routing::v2::{
+                ComputeRoutesRequest, RouteTravelMode, RoutingPreference, Units,
+            },
+            redis::RedisRouteResponse,
         };
         let mut client: RoutesClient<InterceptedService<Channel, GoogleRoutesApiInterceptor>> =
             RoutesClient::with_interceptor(
-                routes_job_copy,
-                GoogleRoutesApiInterceptor::new(api_key_job_copy, FIELD_MASK.to_owned()),
+                google_routes,
+                GoogleRoutesApiInterceptor::new(api_key, FIELD_MASK.to_owned()),
             );
+
+        let mut con = job_redis.get_tokio_connection().await?;
+        log::debug!("Connected to redis.");
 
         let places = Box::new(cache::WaypointCollection::new());
 
@@ -84,8 +86,13 @@ async fn main() -> GeneralResult {
 
         let response = client.compute_routes(req).await?;
 
-        println!("{}", serde_json::to_string_pretty(&response.into_inner())?);
+        //println!("{:#?}", response.metadata());
 
+        let response = RedisRouteResponse::try_from(response)?;
+
+        println!("{}", serde_json::to_string_pretty(&response)?);
+
+        let _: () = con.json_set(response.timestamp(), ".", &response).await?;
         // Create request from Martin Opposite Leona to Heb
         // Send request, get response
         // Serialize into json, save to database
@@ -108,7 +115,7 @@ async fn main() -> GeneralResult {
         .unwrap()
         .and_hms_opt(13, 0, 0)
         .unwrap();
-    let tomorrow = chrono::TimeZone::from_local_datetime(&Local, &tomorrow).unwrap();
+    let tomorrow = chrono::TimeZone::from_utc_datetime(&Utc, &tomorrow);
     scheduler.add_job(
         fut.clone(),
         every_day_starting_from_school,
@@ -133,7 +140,7 @@ async fn main() -> GeneralResult {
     });
 
     let _ = rx.await;
-    //scheduler.stop();
+    scheduler.stop();
 
     Ok(())
 }
