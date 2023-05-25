@@ -1,10 +1,9 @@
 use self::{
     api_interceptor::GoogleRoutesApiInterceptor,
-    google::maps::routing::v2::{
-        routes_client::RoutesClient, ComputeRoutesRequest, ComputeRoutesResponse,
-    },
+    db::SerializableRouteResponse,
+    google::maps::routing::v2::{routes_client::RoutesClient, ComputeRoutesRequest},
+    route_data_types::RouteDataRequest,
 };
-use std::time::Duration;
 use tonic::{codegen::InterceptedService, transport::Channel};
 
 pub mod api_interceptor;
@@ -20,12 +19,14 @@ pub struct RouteDataClient {
 }
 
 impl RouteDataClient {
-    pub fn from_static(s: &'static str, api_key: &str, field_mask: &str) -> RouteDataClient {
+    pub fn from_channel_with_key(
+        channel: Channel,
+        api_key: &str,
+        field_mask: &str,
+    ) -> RouteDataClient {
         Self {
             client: RoutesClient::with_interceptor(
-                Channel::from_static(s)
-                    .timeout(Duration::from_secs(5))
-                    .connect_lazy(),
+                channel,
                 GoogleRoutesApiInterceptor::new(api_key.to_owned(), field_mask.to_owned()),
             ),
         }
@@ -33,9 +34,20 @@ impl RouteDataClient {
 
     pub async fn compute_routes(
         &mut self,
-        request: impl tonic::IntoRequest<ComputeRoutesRequest>,
-    ) -> tonic::Result<tonic::Response<ComputeRoutesResponse>> {
-        self.client.compute_routes(request).await
+        request: RouteDataRequest,
+    ) -> tonic::Result<SerializableRouteResponse> {
+        let origin = request.origin.clone();
+        let destination = request.destination.clone();
+        let request: ComputeRoutesRequest = request.into();
+        let response = self.client.compute_routes(request).await?;
+        match SerializableRouteResponse::try_from_response_with_orig_and_dest(
+            origin,
+            destination,
+            response,
+        ) {
+            Ok(response) => Ok(response),
+            Err(e) => Err(tonic::Status::not_found(e)),
+        }
     }
 
     /* Never used, might delete
@@ -46,4 +58,48 @@ impl RouteDataClient {
             self.client.compute_route_matrix(request).await
         }
     */
+}
+
+pub mod route_data_types {
+    use super::{
+        db::Location,
+        google::maps::routing::v2::{
+            ComputeRoutesRequest, RouteTravelMode, RoutingPreference, Units,
+        },
+    };
+    use crate::server::google::maps::routing::v2::{waypoint::LocationType, Waypoint};
+
+    pub struct RouteDataRequest {
+        pub origin: Location,
+        pub destination: Location,
+        pub intermediates: Vec<Location>,
+    }
+
+    impl From<RouteDataRequest> for ComputeRoutesRequest {
+        fn from(value: RouteDataRequest) -> ComputeRoutesRequest {
+            ComputeRoutesRequest {
+                origin: Some(Waypoint {
+                    location_type: Some(LocationType::PlaceId(value.origin.place_id)),
+                    ..Default::default()
+                }),
+                destination: Some(Waypoint {
+                    location_type: Some(LocationType::PlaceId(value.destination.place_id)),
+                    ..Default::default()
+                }),
+                intermediates: value
+                    .intermediates
+                    .into_iter()
+                    .map(|location| Waypoint {
+                        location_type: Some(LocationType::PlaceId(location.place_id)),
+                        ..Default::default()
+                    })
+                    .collect(),
+                routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
+                travel_mode: RouteTravelMode::Drive.into(),
+                units: Units::Imperial.into(),
+                language_code: "en-US".to_owned(),
+                ..Default::default()
+            }
+        }
+    }
 }

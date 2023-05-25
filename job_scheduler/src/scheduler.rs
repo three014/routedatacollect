@@ -1,20 +1,12 @@
+use crate::{job, runner, AsyncFn, JobId};
+use chrono::{TimeZone, Utc};
+use cron::Schedule;
+use futures::future::BoxFuture;
 use std::{
     sync::{mpsc, Arc, Condvar, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
-
-use chrono::{TimeZone, Utc};
-use cron::Schedule;
-use futures::future::BoxFuture;
-
-use crate::{job, runner, AsyncFn, JobId};
-
-enum ProcessManagerState {
-    Sleep(Duration),
-    Run((JobId, BoxFuture<'static, crate::Result>)),
-    Pass,
-}
 
 pub struct Scheduler<T>
 where
@@ -24,7 +16,7 @@ where
     process_manager: Option<JoinHandle<()>>,
     running: Arc<(Mutex<bool>, Condvar)>,
     timezone: T,
-    job_stats: Arc<Mutex<job::JobBoard<T>>>,
+    job_board: Arc<Mutex<job::JobBoard<T>>>,
 }
 
 impl Scheduler<Utc> {
@@ -33,7 +25,7 @@ impl Scheduler<Utc> {
             process_manager: None,
             timezone: Utc,
             running: Arc::new((Mutex::new(false), Condvar::new())),
-            job_stats: Arc::new(Mutex::new(job::JobBoard::new(Utc))),
+            job_board: Arc::new(Mutex::new(job::JobBoard::new(Utc))),
         }
     }
 }
@@ -57,7 +49,7 @@ where
             process_manager: None,
             timezone,
             running: Arc::new((Mutex::new(false), Condvar::new())),
-            job_stats: Arc::new(Mutex::new(job::JobBoard::new(timezone))),
+            job_board: Arc::new(Mutex::new(job::JobBoard::new(timezone))),
         }
     }
 
@@ -67,8 +59,8 @@ where
         } // DO NOT START NEW THREAD IF ALREADY ACTIVE
 
         let running = self.running.clone();
-        let jobs = self.job_stats.clone();
-        let lock = self.job_stats.lock().unwrap();
+        let jobs = self.job_board.clone();
+        let lock = self.job_board.lock().unwrap();
         let running_jobs_report = lock.currently_running();
         drop(lock);
 
@@ -77,6 +69,12 @@ where
         log::info!(target: "scheduler::Scheduler::start", "Starting service.");
 
         self.process_manager = Some(thread::spawn(move || {
+            enum ProcessManagerState {
+                Sleep(Duration),
+                Run((JobId, BoxFuture<'static, crate::Result>)),
+                Pass,
+            }
+
             // Create a new thread and channel.
             // New thread gets receiving channel, curr thread gets sender channel.
             let (sender, reciever) = mpsc::channel::<(JobId, BoxFuture<'static, crate::Result>)>();
@@ -190,18 +188,14 @@ where
     where
         C: AsyncFn + Send + 'static,
     {
-        let (job_id, should_stop_service) = match self.job_stats.lock() {
+        let (job_id, should_stop_service) = match self.job_board.lock() {
             Ok(mut jobs) => (
                 jobs.schedule_with_limit(command, schedule, self.timezone, limit_num_execs),
                 false,
             ),
             Err(mut e) => {
                 log::error!(target: "scheduler::Scheduler::add_job", "{e}. Service stopped. Will still attempt to add job to schedule.");
-                (
-                    e.get_mut()
-                        .schedule(command, schedule, self.timezone),
-                    true,
-                )
+                (e.get_mut().schedule_with_limit(command, schedule, self.timezone, limit_num_execs), true)
             }
         };
         if should_stop_service {
@@ -216,7 +210,7 @@ where
     /// Removes a job from the scheduler. Any active executions of this job
     /// will be allowed to complete, but all future jobs will not execute
     pub fn remove_job(&mut self, id: JobId) -> Result<(), job::DescheduleError> {
-        let (result, should_stop_service) = match self.job_stats.lock() {
+        let (result, should_stop_service) = match self.job_board.lock() {
             Ok(mut jobs) => (jobs.deschedule(id), false),
             Err(e) => {
                 log::error!(target: "scheduler::Scheduler::remove_job", "{e}. Service stopped.");

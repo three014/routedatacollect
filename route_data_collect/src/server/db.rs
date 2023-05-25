@@ -45,15 +45,19 @@ impl<'de> Deserialize<'de> for DateTimeWrapper {
 pub struct SerializableRouteResponse {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     id: Option<mongodb::bson::oid::ObjectId>,
+    origin: Location,
+    destination: Location,
     date: DateTimeWrapper,
     response: ComputeRoutesResponse,
 }
 
-impl TryFrom<tonic::Response<ComputeRoutesResponse>> for SerializableRouteResponse {
-    type Error = String;
-
-    fn try_from(value: tonic::Response<ComputeRoutesResponse>) -> Result<Self, Self::Error> {
-        let date = value
+impl SerializableRouteResponse {
+    pub fn try_from_response_with_orig_and_dest(
+        origin: Location,
+        destination: Location,
+        response: tonic::Response<ComputeRoutesResponse>,
+    ) -> Result<Self, String> {
+        let date = response
             .metadata()
             .get("date")
             .ok_or("Response metadata has no \"date\" field.")?
@@ -63,7 +67,15 @@ impl TryFrom<tonic::Response<ComputeRoutesResponse>> for SerializableRouteRespon
         Ok(Self {
             id: None,
             date: DateTimeWrapper(date),
-            response: value.into_inner(),
+            origin,
+            destination,
+            response: response.into_inner(),
         })
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct Location {
+    pub address: String,
+    pub place_id: String,
 }

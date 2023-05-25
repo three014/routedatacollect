@@ -1,9 +1,10 @@
-use crate::server::{cache, GeneralResult};
+use crate::server::GeneralResult;
 use bson::Document;
 use chrono::NaiveDate;
 use job_scheduler::scheduler::Scheduler;
 use mongodb::{options::ClientOptions, Client};
-use std::io::Write;
+use std::{io::Write, time::Duration};
+use tonic::transport::Channel;
 
 mod server;
 
@@ -34,8 +35,13 @@ async fn main() -> GeneralResult {
         .init();
     let api_key = std::env::var("API_KEY").map_err(|_| "Missing API_KEY environment variable")?;
     let mut scheduler = Scheduler::with_timezone(chrono_tz::America::Chicago);
-    let every_day_starting_from_school = "00 15 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
+    let every_day_starting_from_school = "00 16 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
+    let channel = Channel::from_static(SERVER_ADDR)
+        .timeout(Duration::from_secs(2))
+        .keep_alive_while_idle(true)
+        .connect()
+        .await?;
     let mongo_uri = std::env::var("CONN_URI")
         .map_err(|_| "Missing CONN_URI environment variable for mongodb")?;
     let mongo = Client::with_options(ClientOptions::parse_async(mongo_uri).await?)?;
@@ -45,15 +51,12 @@ async fn main() -> GeneralResult {
 
     let fut = move || async move {
         use crate::server::{
-            db::SerializableRouteResponse,
-            google::maps::routing::v2::{
-                ComputeRoutesRequest, RouteTravelMode, RoutingPreference, Units,
-            },
-            RouteDataClient,
+            cache::WaypointCollection, route_data_types::RouteDataRequest, RouteDataClient,
         };
-        let mut client = RouteDataClient::from_static(SERVER_ADDR, api_key.as_str(), FIELD_MASK);
+        let mut client =
+            RouteDataClient::from_channel_with_key(channel, api_key.as_str(), FIELD_MASK);
 
-        let places = Box::new(cache::WaypointCollection::new());
+        let places = Box::new(WaypointCollection::new());
 
         println!("Doing the cool route stuff");
 
@@ -61,9 +64,9 @@ async fn main() -> GeneralResult {
         // Send request, get response
         // Serialize into json, save to database
         // Wait until _:43pm
-        let req = tonic::Request::new(ComputeRoutesRequest {
-            origin: Some(places.one_utsa_circle().clone()),
-            destination: Some(places.fm78_heb().clone()),
+        let req = RouteDataRequest {
+            origin: places.one_utsa_circle().clone(),
+            destination: places.fm78_heb().clone(),
             intermediates: vec![
                 places.crossroads_park_and_ride().clone(),
                 places.martin_opposite_leona().clone(),
@@ -77,28 +80,21 @@ async fn main() -> GeneralResult {
                 places.castle_cross_and_castle_hunt().clone(),
                 places.train_tracks_on_rittiman_rd().clone(),
             ],
-            routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
-            travel_mode: RouteTravelMode::Drive.into(),
-            units: Units::Imperial.into(),
-            language_code: "en-US".to_owned(),
-            ..Default::default()
-        });
+        };
 
-        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
-        println!("{}", serde_json::to_string_pretty(&response)?);
+        let response = client.compute_routes(req).await?;
         utsa_to_heb
             .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
             .await?;
-
-        tokio::time::sleep(chrono::Duration::minutes(28).to_std()?).await;
+        tokio::time::sleep(chrono::Duration::minutes(26).to_std()?).await;
 
         // Create request from Martin Opposite Leona to Heb
         // Send request, get response
         // Serialize into json, save to database
         // Wait until ++_:25pm
-        let req = tonic::Request::new(ComputeRoutesRequest {
-            origin: Some(places.martin_opposite_leona().clone()),
-            destination: Some(places.fm78_heb().clone()),
+        let req = RouteDataRequest {
+            origin: places.martin_opposite_leona().clone(),
+            destination: places.fm78_heb().clone(),
             intermediates: vec![
                 places.via_centro_plaza().clone(),
                 places.utsa_downtown_campus().clone(),
@@ -110,62 +106,45 @@ async fn main() -> GeneralResult {
                 places.castle_cross_and_castle_hunt().clone(),
                 places.train_tracks_on_rittiman_rd().clone(),
             ],
-            routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
-            travel_mode: RouteTravelMode::Drive.into(),
-            units: Units::Imperial.into(),
-            language_code: "en-US".to_owned(),
-            ..Default::default()
-        });
+        };
 
-        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
+        let response = client.compute_routes(req).await?;
         utsa_to_heb
             .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
             .await?;
-
-        tokio::time::sleep(chrono::Duration::minutes(42).to_std()?).await;
+        tokio::time::sleep(chrono::Duration::minutes(43).to_std()?).await;
 
         // Create request from Randolph Park and Ride to Heb
         // Send request, get response
         // Serialize into json, save to database
         // Wait until _:35pm
-        let req = tonic::Request::new(ComputeRoutesRequest {
-            origin: Some(places.randolph_park_and_ride().clone()),
-            destination: Some(places.fm78_heb().clone()),
+        let req = RouteDataRequest {
+            origin: places.randolph_park_and_ride().clone(),
+            destination: places.fm78_heb().clone(),
             intermediates: vec![
                 places.walzem_and_mordred().clone(),
                 places.midcrown_ed_white().clone(),
                 places.castle_cross_and_castle_hunt().clone(),
                 places.train_tracks_on_rittiman_rd().clone(),
             ],
-            routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
-            travel_mode: RouteTravelMode::Drive.into(),
-            units: Units::Imperial.into(),
-            language_code: "en-US".to_owned(),
-            ..Default::default()
-        });
+        };
 
-        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
+        let response = client.compute_routes(req).await?;
         utsa_to_heb
             .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
             .await?;
-
-        tokio::time::sleep(chrono::Duration::minutes(10).to_std()?).await;
+        tokio::time::sleep(chrono::Duration::minutes(14).to_std()?).await;
 
         // Create request from Train Tracks at Rittiman to Heb
         // Send request, get response
         // Serialize into json, save to database
-        let req = tonic::Request::new(ComputeRoutesRequest {
-            origin: Some(places.castle_cross_and_castle_hunt().clone()),
-            destination: Some(places.fm78_heb().clone()),
+        let req = RouteDataRequest {
+            origin: places.castle_cross_and_castle_hunt().clone(),
+            destination: places.fm78_heb().clone(),
             intermediates: vec![places.train_tracks_on_rittiman_rd().clone()],
-            routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
-            travel_mode: RouteTravelMode::Drive.into(),
-            units: Units::Imperial.into(),
-            language_code: "en-US".to_owned(),
-            ..Default::default()
-        });
+        };
 
-        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
+        let response = client.compute_routes(req).await?;
         utsa_to_heb
             .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
             .await?;

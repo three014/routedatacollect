@@ -115,7 +115,7 @@ fn shutdown(rt: &tokio::runtime::Runtime, handles: &mut HashMap<JobId, JoinHandl
                     handle_result(id, task).await;
                 }
             } => {},
-            _ = tokio::time::sleep(Duration::from_secs(8)) => {}
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
         }
     });
 }

@@ -63,7 +63,7 @@ mod job_internal {
 
         /// Returns the next execution time of this job. This will always
         /// occur if the job was created with a `Limit::None`.
-        /// 
+        ///
         /// Returns `None` if the job reaches the limit that was specified with either
         /// `Limit::EndDate` or `Limit::NumTimes`.
         pub fn next_exec_time(&self) -> Option<&DateTime<T>> {
@@ -137,8 +137,8 @@ mod job_internal {
         /// we compare the id's and return that result. If `self` has
         /// no more execution times left, then return `Ordering::Less`,
         /// otherwise return `Ordering::Greater`.
-        /// 
-        /// This is so the scheduler can sooner sift out the jobs that 
+        ///
+        /// This is so the scheduler can sooner sift out the jobs that
         /// have already completed, leaving the queue filled with only
         /// available jobs.
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -159,7 +159,6 @@ mod job_internal {
     }
 }
 
-
 pub enum DescheduleError {
     AlreadyScheduled,
     JobDoesNotExist,
@@ -175,10 +174,10 @@ pub enum JobError {
 /// Stores all the jobs and contains the logic
 /// for scheduling, descheduling, and selecting
 /// the next job to execute.
-/// 
+///
 /// Currently uses a `std::collections::BinaryHeap`
 /// to store available jobs, but this is subject
-/// to change if I can learn how to implement a 
+/// to change if I can learn how to implement a
 /// `CalendarQueue`.
 pub struct JobBoard<T>
 where
@@ -207,9 +206,9 @@ where
     }
 
     /// Creates a new `JobBoard<T>` with the specified capacity.
-    /// 
+    ///
     /// The capacity is a `u32` because the job ids are also `u32` values,
-    /// therefore limiting the maximum number of unique jobs in the 
+    /// therefore limiting the maximum number of unique jobs in the
     /// job board to `u32::MAX`.
     pub fn with_capacity(timezone: T, capacity: u32) -> Self {
         Self {
@@ -274,13 +273,6 @@ where
         jid
     }
 
-    pub fn schedule<C>(&mut self, command: C, schedule: Schedule, timezone: T) -> JobId
-    where
-        C: AsyncFn + Send + 'static,
-    {
-        self.schedule_with_limit(command, schedule, timezone, Limit::None)
-    }
-
     /// Returns the next time that a job should be executed, or
     /// nothing if there are no jobs left.
     /// Will return the current time if the next job is complete.
@@ -302,20 +294,19 @@ where
                 if let Some(was_deleted) = self.scheduled_for_deletion.get_mut(&id) {
                     *was_deleted = true;
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job was scheduled for deletion, returning error.");
-                    return Err(JobError::ScheduledForDeletion);
-                }
-                if job.0.next_exec_time().is_none() {
+                    Err(JobError::ScheduledForDeletion)
+                } else if job.0.next_exec_time().is_none() {
                     self.scheduled_for_deletion.insert(id, true);
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job had no more datetimes, is finished, returning error.");
-                    return Err(JobError::JobFinished);
+                    Err(JobError::JobFinished)
+                } else {
+                    // Create the future
+                    let future = job.0.call();
+                    log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Calling job's function, advancing schedule and returning future.");
+                    job.0.advance_schedule();
+                    self.active_jobs.push(job);
+                    Ok((id, future))
                 }
-
-                // Create the future
-                let future = job.0.call();
-                log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Calling job's function, advancing schedule and returning future.");
-                job.0.advance_schedule();
-                self.active_jobs.push(job);
-                Ok((id, future))
             }
             None => {
                 log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "No more jobs in the heap, returning error.");
