@@ -1,13 +1,9 @@
-use crate::server::{
-    api_interceptor::GoogleRoutesApiInterceptor, cache,
-    google::maps::routing::v2::routes_client::RoutesClient, GeneralResult,
-};
-use chrono::{Local, NaiveDate, Utc};
-
-use job_scheduler::scheduler;
-use redis::JsonAsyncCommands;
-use std::time::Duration;
-use tonic::{codegen::InterceptedService, transport::Channel};
+use crate::server::{cache, GeneralResult};
+use bson::Document;
+use chrono::NaiveDate;
+use job_scheduler::scheduler::Scheduler;
+use mongodb::{options::ClientOptions, Client};
+use std::io::Write;
 
 mod server;
 
@@ -24,35 +20,38 @@ const FIELD_MASK: &str = "routes.distanceMeters,routes.duration,routes.staticDur
 /// for pinging Google Routes API for data from UTSA to the HEB on FM-78.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> GeneralResult {
-    env_logger::init();
-    let api_key = std::env::var("API_KEY")?;
-    let mut scheduler = scheduler::Scheduler::new();
+    env_logger::builder()
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{} {:<5} {:<28} {}",
+                chrono::Local::now().format("%d/%m/%Y %H:%M:%S"),
+                record.level(),
+                record.module_path().unwrap_or(""),
+                record.args()
+            )
+        })
+        .init();
+    let api_key = std::env::var("API_KEY").map_err(|_| "Missing API_KEY environment variable")?;
+    let mut scheduler = Scheduler::with_timezone(chrono_tz::America::Chicago);
     let every_day_starting_from_school = "00 15 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
-    let redis = redis::Client::open("redis://db")?;
-    let google_routes = Channel::from_static(SERVER_ADDR)
-        .timeout(Duration::from_secs(5))
-        .connect()
-        .await?;
+    let mongo_uri = std::env::var("CONN_URI")
+        .map_err(|_| "Missing CONN_URI environment variable for mongodb")?;
+    let mongo = Client::with_options(ClientOptions::parse_async(mongo_uri).await?)?;
+    let utsa_to_heb = mongo
+        .database("routes")
+        .collection::<Document>("utsa_to_heb");
 
-    log::debug!("Connected to Google Routes API.");
-    
-    let job_redis = redis.clone();
     let fut = move || async move {
         use crate::server::{
+            db::SerializableRouteResponse,
             google::maps::routing::v2::{
                 ComputeRoutesRequest, RouteTravelMode, RoutingPreference, Units,
             },
-            redis::RedisRouteResponse,
+            RouteDataClient,
         };
-        let mut client: RoutesClient<InterceptedService<Channel, GoogleRoutesApiInterceptor>> =
-            RoutesClient::with_interceptor(
-                google_routes,
-                GoogleRoutesApiInterceptor::new(api_key, FIELD_MASK.to_owned()),
-            );
-
-        let mut con = job_redis.get_tokio_connection().await?;
-        log::debug!("Connected to redis.");
+        let mut client = RouteDataClient::from_static(SERVER_ADDR, api_key.as_str(), FIELD_MASK);
 
         let places = Box::new(cache::WaypointCollection::new());
 
@@ -61,7 +60,7 @@ async fn main() -> GeneralResult {
         // Create request from Utsa to Heb
         // Send request, get response
         // Serialize into json, save to database
-        // Wait until _:45pm
+        // Wait until _:43pm
         let req = tonic::Request::new(ComputeRoutesRequest {
             origin: Some(places.one_utsa_circle().clone()),
             destination: Some(places.fm78_heb().clone()),
@@ -75,6 +74,7 @@ async fn main() -> GeneralResult {
                 places.randolph_park_and_ride().clone(),
                 places.walzem_and_mordred().clone(),
                 places.midcrown_ed_white().clone(),
+                places.castle_cross_and_castle_hunt().clone(),
                 places.train_tracks_on_rittiman_rd().clone(),
             ],
             routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
@@ -84,50 +84,107 @@ async fn main() -> GeneralResult {
             ..Default::default()
         });
 
-        let response = client.compute_routes(req).await?;
-
-        //println!("{:#?}", response.metadata());
-
-        let response = RedisRouteResponse::try_from(response)?;
-
+        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
         println!("{}", serde_json::to_string_pretty(&response)?);
+        utsa_to_heb
+            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
+            .await?;
 
-        let _: () = con.json_set(response.timestamp(), ".", &response).await?;
+        tokio::time::sleep(chrono::Duration::minutes(28).to_std()?).await;
+
         // Create request from Martin Opposite Leona to Heb
         // Send request, get response
         // Serialize into json, save to database
-        // Wait until ++_:15pm
+        // Wait until ++_:25pm
+        let req = tonic::Request::new(ComputeRoutesRequest {
+            origin: Some(places.martin_opposite_leona().clone()),
+            destination: Some(places.fm78_heb().clone()),
+            intermediates: vec![
+                places.via_centro_plaza().clone(),
+                places.utsa_downtown_campus().clone(),
+                places.utsa_san_pedro().clone(),
+                places.grand_hyatt().clone(),
+                places.randolph_park_and_ride().clone(),
+                places.walzem_and_mordred().clone(),
+                places.midcrown_ed_white().clone(),
+                places.castle_cross_and_castle_hunt().clone(),
+                places.train_tracks_on_rittiman_rd().clone(),
+            ],
+            routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
+            travel_mode: RouteTravelMode::Drive.into(),
+            units: Units::Imperial.into(),
+            language_code: "en-US".to_owned(),
+            ..Default::default()
+        });
+
+        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
+        utsa_to_heb
+            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
+            .await?;
+
+        tokio::time::sleep(chrono::Duration::minutes(42).to_std()?).await;
 
         // Create request from Randolph Park and Ride to Heb
         // Send request, get response
         // Serialize into json, save to database
-        // Wait until _:30pm
+        // Wait until _:35pm
+        let req = tonic::Request::new(ComputeRoutesRequest {
+            origin: Some(places.randolph_park_and_ride().clone()),
+            destination: Some(places.fm78_heb().clone()),
+            intermediates: vec![
+                places.walzem_and_mordred().clone(),
+                places.midcrown_ed_white().clone(),
+                places.castle_cross_and_castle_hunt().clone(),
+                places.train_tracks_on_rittiman_rd().clone(),
+            ],
+            routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
+            travel_mode: RouteTravelMode::Drive.into(),
+            units: Units::Imperial.into(),
+            language_code: "en-US".to_owned(),
+            ..Default::default()
+        });
+
+        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
+        utsa_to_heb
+            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
+            .await?;
+
+        tokio::time::sleep(chrono::Duration::minutes(10).to_std()?).await;
 
         // Create request from Train Tracks at Rittiman to Heb
         // Send request, get response
         // Serialize into json, save to database
+        let req = tonic::Request::new(ComputeRoutesRequest {
+            origin: Some(places.castle_cross_and_castle_hunt().clone()),
+            destination: Some(places.fm78_heb().clone()),
+            intermediates: vec![places.train_tracks_on_rittiman_rd().clone()],
+            routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
+            travel_mode: RouteTravelMode::Drive.into(),
+            units: Units::Imperial.into(),
+            language_code: "en-US".to_owned(),
+            ..Default::default()
+        });
+
+        let response: SerializableRouteResponse = client.compute_routes(req).await?.try_into()?;
+        utsa_to_heb
+            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
+            .await?;
 
         Ok(())
     };
 
     scheduler.start();
-    let tomorrow = NaiveDate::from_ymd_opt(2023, 5, 22)
+    let october_15th = NaiveDate::from_ymd_opt(2023, 10, 15)
         .unwrap()
         .and_hms_opt(13, 0, 0)
         .unwrap();
-    let tomorrow = chrono::TimeZone::from_utc_datetime(&Utc, &tomorrow);
-    scheduler.add_job(
-        fut.clone(),
-        every_day_starting_from_school,
-        job_scheduler::Limit::EndDate(tomorrow),
-    );
-
     scheduler.add_job(
         fut,
-        "30 * * * * *".parse()?,
-        job_scheduler::Limit::NumTimes(1),
+        every_day_starting_from_school,
+        job_scheduler::Limit::EndDate(october_15th),
     );
 
+    // Shutdown listeners
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};

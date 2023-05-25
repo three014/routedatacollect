@@ -1,22 +1,22 @@
+use self::job_internal::Job;
+use crate::{runner::RunningJobs, AsyncFn, JobId, Limit};
+use chrono::{DateTime, TimeZone, Utc};
+use cron::Schedule;
+use futures::future::BoxFuture;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
     sync::{Arc, RwLock},
 };
-
-use chrono::{DateTime, TimeZone, Utc};
-use cron::Schedule;
-use futures::future::BoxFuture;
-
-use crate::{runner::RunningJobs, AsyncFn, JobId, Limit};
-
-use self::job_internal::Job;
 mod job_internal {
-    use chrono::{DateTime, TimeZone};
+    use crate::{AsyncFn, JobId, Limit};
+    use chrono::{DateTime, TimeZone, Utc};
     use cron::Schedule;
 
-    use crate::{AsyncFn, JobId, Limit};
-
+    /// The Job item itself. Contains the async function/closure
+    /// and the schedule for when this job should be executed. Interprets
+    /// the schedule with the supplied timezone, so all future datetimes given
+    /// by this job will be of the same timezone.
     pub struct Job<T>
     where
         T: TimeZone + Send,
@@ -30,15 +30,18 @@ mod job_internal {
 
     impl<T> Job<T>
     where
-        T: TimeZone + Send + 'static,
+        T: TimeZone + Clone + Copy + Send + 'static,
         T::Offset: Send,
     {
+        /// Creates a new job struct with the supplied
+        /// id, ['job_scheduler::AsyncFn'], schedule, timezone,
+        /// and limit
         pub fn with_limit<C: AsyncFn + Send + 'static>(
             id: JobId,
             command: C,
             schedule: Schedule,
             timezone: T,
-            limit: Limit<T>,
+            limit: Limit,
         ) -> Self {
             let mut schedule = schedule.upcoming_owned(timezone);
             Self {
@@ -50,25 +53,32 @@ mod job_internal {
                     Limit::NumTimes(num_times) => {
                         Box::new(schedule.take(num_times.checked_sub(1).unwrap_or_default()))
                     }
-                    Limit::EndDate(end_date) => {
-                        Box::new(schedule.take_while(move |date_time| {
-                            date_time.timestamp() < end_date.timestamp()
-                        }))
-                    }
+                    Limit::EndDate(end_date) => Box::new(schedule.take_while(move |date_time| {
+                        date_time.with_timezone(&Utc).timestamp()
+                            < Utc.from_local_datetime(&end_date).unwrap().timestamp()
+                    })),
                 },
             }
         }
 
+        /// Returns the next execution time of this job. This will always
+        /// occur if the job was created with a `Limit::None`.
+        /// 
+        /// Returns `None` if the job reaches the limit that was specified with either
+        /// `Limit::EndDate` or `Limit::NumTimes`.
         pub fn next_exec_time(&self) -> Option<&DateTime<T>> {
             self.next_exec_time.as_ref()
         }
 
+        /// Advances the schedule of this job to the next possible `chrono::DateTime`, if it exists.
+        /// Use `next_exec_time` to see check the actual datetime.
         pub fn advance_schedule(&mut self) {
             log::trace!(target: "job::Job::advance_schedule", "Last exec time for {}: {:?}", self.id(), self.next_exec_time);
             self.next_exec_time = self.schedule.next();
             log::trace!(target: "job::Job::advance_schedule", "Next exec time for {}: {:?}", self.id(), self.next_exec_time);
         }
 
+        /// Returns the id given to this job.
         pub fn id(&self) -> JobId {
             self.id
         }
@@ -123,10 +133,14 @@ mod job_internal {
     {
         /// A job only has two comparable features: its id and
         /// its next execution time. We compare the execution times
-        /// first, where if both exec times are `None` or `Some` then
+        /// first, but if both exec times are `None` or `Some` then
         /// we compare the id's and return that result. If `self` has
         /// no more execution times left, then return `Ordering::Less`,
         /// otherwise return `Ordering::Greater`.
+        /// 
+        /// This is so the scheduler can sooner sift out the jobs that 
+        /// have already completed, leaving the queue filled with only
+        /// available jobs.
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
             use std::cmp::Ordering;
 
@@ -145,7 +159,6 @@ mod job_internal {
     }
 }
 
-const STARTING_AVAILIABLE_IDS: u32 = 16;
 
 pub enum DescheduleError {
     AlreadyScheduled,
@@ -159,7 +172,15 @@ pub enum JobError {
     ScheduledForDeletion,
 }
 
-pub struct JobSchedule<T>
+/// Stores all the jobs and contains the logic
+/// for scheduling, descheduling, and selecting
+/// the next job to execute.
+/// 
+/// Currently uses a `std::collections::BinaryHeap`
+/// to store available jobs, but this is subject
+/// to change if I can learn how to implement a 
+/// `CalendarQueue`.
+pub struct JobBoard<T>
 where
     T: TimeZone + Send + Sync,
     T::Offset: Send,
@@ -173,15 +194,23 @@ where
     running_jobs: Arc<RwLock<RunningJobs>>,
 }
 
-impl<T> JobSchedule<T>
+impl<T> JobBoard<T>
 where
-    T: TimeZone + Send + Sync + 'static,
+    T: TimeZone + Copy + Clone + Send + Sync + 'static,
     T::Offset: Send,
 {
+    const STARTING_AVAILIABLE_IDS: u32 = 16;
+
+    /// Creates a new `JobBoard<T>` with a capacity of 16.
     pub fn new(timezone: T) -> Self {
-        Self::with_capacity(timezone, STARTING_AVAILIABLE_IDS)
+        Self::with_capacity(timezone, Self::STARTING_AVAILIABLE_IDS)
     }
 
+    /// Creates a new `JobBoard<T>` with the specified capacity.
+    /// 
+    /// The capacity is a `u32` because the job ids are also `u32` values,
+    /// therefore limiting the maximum number of unique jobs in the 
+    /// job board to `u32::MAX`.
     pub fn with_capacity(timezone: T, capacity: u32) -> Self {
         Self {
             now: None,
@@ -205,7 +234,7 @@ where
         command: C,
         schedule: Schedule,
         timezone: T,
-        limit: Limit<T>,
+        limit: Limit,
     ) -> JobId
     where
         C: AsyncFn + Send + 'static,
@@ -307,7 +336,7 @@ where
         }
     }
 
-    pub fn running_jobs_report(&self) -> Arc<RwLock<RunningJobs>> {
+    pub fn currently_running(&self) -> Arc<RwLock<RunningJobs>> {
         self.running_jobs.clone()
     }
 

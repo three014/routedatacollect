@@ -42,12 +42,14 @@ impl<'de> Deserialize<'de> for DateTimeWrapper {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct RedisRouteResponse {
+pub struct SerializableRouteResponse {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    id: Option<mongodb::bson::oid::ObjectId>,
     date: DateTimeWrapper,
     response: ComputeRoutesResponse,
 }
 
-impl TryFrom<tonic::Response<ComputeRoutesResponse>> for RedisRouteResponse {
+impl TryFrom<tonic::Response<ComputeRoutesResponse>> for SerializableRouteResponse {
     type Error = String;
 
     fn try_from(value: tonic::Response<ComputeRoutesResponse>) -> Result<Self, Self::Error> {
@@ -59,14 +61,9 @@ impl TryFrom<tonic::Response<ComputeRoutesResponse>> for RedisRouteResponse {
             .map_err(|e| e.to_string())?;
         let date = DateTime::parse_from_rfc2822(date).map_err(|e| e.to_string())?;
         Ok(Self {
+            id: None,
             date: DateTimeWrapper(date),
             response: value.into_inner(),
         })
-    }
-}
-
-impl RedisRouteResponse {
-    pub fn timestamp(&self) -> i64 {
-        self.date.0.timestamp()
     }
 }

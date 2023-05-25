@@ -12,7 +12,7 @@ use std::{
 use tokio::task::JoinHandle;
 
 pub fn runner(
-    job_receiver: Receiver<(u32, BoxFuture<'static, crate::Result>)>,
+    job_receiver: Receiver<(JobId, BoxFuture<'static, crate::Result>)>,
     runner_go_sleep: Arc<(Mutex<()>, Condvar)>,
     running_jobs_report: Arc<RwLock<RunningJobs>>,
 ) {
@@ -22,7 +22,7 @@ pub fn runner(
         .build()
         .unwrap();
 
-    let (sender, receiver) = std::sync::mpsc::channel::<u32>();
+    let (sender, receiver) = std::sync::mpsc::channel::<JobId>();
     let mut tokio_receiver = crate::receiver::PeekableReciever::from_receiver(receiver);
     log::info!(target: "runner::runner", "Started.");
 
@@ -69,12 +69,7 @@ pub fn runner(
             }
             Err(TryRecvError::Empty) => {
                 let mut lock = running_jobs_report.write().unwrap();
-                if lock
-                    .inner
-                    .values()
-                    .all(|handle| handle.is_finished())
-                    && !waiting_on_jobs
-                {
+                if lock.inner.values().all(|handle| handle.is_finished()) && !waiting_on_jobs {
                     drain_handles(&rt, &mut lock.inner); // Housekeeping
                     drop(lock);
                     log::debug!(target: "runner::runner", "No active jobs running. Going to sleep.");
@@ -97,7 +92,7 @@ pub fn runner(
     }
 
     log::info!(target: "runner::runner", "Reciever disconnected, waiting for current jobs to finish.");
-    drain_handles(&rt, &mut running_jobs_report.write().unwrap().inner);
+    shutdown(&rt, &mut running_jobs_report.write().unwrap().inner);
     log::trace!(target: "runner::runner", "Leaving function.");
 }
 
@@ -108,6 +103,19 @@ fn drain_handles(
     rt.block_on(async {
         for (id, task) in handles.drain() {
             handle_result(id, task).await;
+        }
+    });
+}
+
+fn shutdown(rt: &tokio::runtime::Runtime, handles: &mut HashMap<JobId, JoinHandle<crate::Result>>) {
+    rt.block_on(async {
+        tokio::select! {
+            _ = async {
+                for (id, task) in handles.drain() {
+                    handle_result(id, task).await;
+                }
+            } => {},
+            _ = tokio::time::sleep(Duration::from_secs(8)) => {}
         }
     });
 }
@@ -137,7 +145,11 @@ impl RunningJobs {
     }
 
     pub fn new() -> Self {
-        RunningJobs { inner: utils::Inner { map: HashMap::new() } }
+        RunningJobs {
+            inner: utils::Inner {
+                map: HashMap::new(),
+            },
+        }
     }
 }
 

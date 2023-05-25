@@ -18,13 +18,13 @@ enum ProcessManagerState {
 
 pub struct Scheduler<T>
 where
-    T: TimeZone + Send + Sync + 'static,
+    T: TimeZone + Copy + Clone + Send + Sync + 'static,
     T::Offset: Send,
 {
     process_manager: Option<JoinHandle<()>>,
     running: Arc<(Mutex<bool>, Condvar)>,
     timezone: T,
-    job_stats: Arc<Mutex<job::JobSchedule<T>>>,
+    job_stats: Arc<Mutex<job::JobBoard<T>>>,
 }
 
 impl Scheduler<Utc> {
@@ -33,7 +33,7 @@ impl Scheduler<Utc> {
             process_manager: None,
             timezone: Utc,
             running: Arc::new((Mutex::new(false), Condvar::new())),
-            job_stats: Arc::new(Mutex::new(job::JobSchedule::new(Utc))),
+            job_stats: Arc::new(Mutex::new(job::JobBoard::new(Utc))),
         }
     }
 }
@@ -46,7 +46,7 @@ impl Default for Scheduler<Utc> {
 
 impl<T> Scheduler<T>
 where
-    T: TimeZone + Send + Sync + 'static,
+    T: TimeZone + Copy + Clone + Send + Sync + 'static,
     T::Offset: Send,
 {
     const SECONDS_IN_AN_HOUR: u64 = 3600;
@@ -55,9 +55,9 @@ where
     pub fn with_timezone(timezone: T) -> Self {
         Self {
             process_manager: None,
-            timezone: timezone.clone(),
+            timezone,
             running: Arc::new((Mutex::new(false), Condvar::new())),
-            job_stats: Arc::new(Mutex::new(job::JobSchedule::new(timezone))),
+            job_stats: Arc::new(Mutex::new(job::JobBoard::new(timezone))),
         }
     }
 
@@ -68,9 +68,8 @@ where
 
         let running = self.running.clone();
         let jobs = self.job_stats.clone();
-        let timezone = self.timezone.clone();
         let lock = self.job_stats.lock().unwrap();
-        let running_jobs_report = lock.running_jobs_report();
+        let running_jobs_report = lock.currently_running();
         drop(lock);
 
         // START
@@ -84,11 +83,7 @@ where
             let sleep = Arc::new((Mutex::new(()), Condvar::new()));
             let sleep_for_runner = sleep.clone();
             let runner_handle = thread::spawn(move || {
-                runner::runner(
-                    reciever,
-                    sleep_for_runner,
-                    running_jobs_report,
-                );
+                runner::runner(reciever, sleep_for_runner, running_jobs_report);
             });
 
             while *running.0.lock().unwrap() {
@@ -96,10 +91,12 @@ where
                 let mut jobs = jobs.lock().unwrap();
 
                 if let Some(exec_time) = jobs.peek_next() {
-                    let now = Utc::now().with_timezone(&timezone);
-                    if *exec_time > now {
-                        log::debug!(target: "scheduler::process_manager_thread", "Can't run yet, time is in the future: {:?}.", exec_time);
-                        let diff = exec_time.clone() - now.clone();
+                    let now = Utc::now();
+                    let then = exec_time.with_timezone(&Utc);
+                    log::debug!("now: {:?}, then: {:?}", &now, &then);
+                    if then > now {
+                        log::debug!(target: "scheduler::process_manager_thread", "Can't run yet, time is in the future: {:?}.", then);
+                        let diff = then - now;
 
                         state = ProcessManagerState::Sleep(
                             diff.to_std().unwrap_or(Duration::from_secs(0)),
@@ -188,21 +185,21 @@ where
         &mut self,
         command: C,
         schedule: Schedule,
-        limit_num_execs: crate::Limit<T>,
+        limit_num_execs: crate::Limit,
     ) -> JobId
     where
         C: AsyncFn + Send + 'static,
     {
         let (job_id, should_stop_service) = match self.job_stats.lock() {
             Ok(mut jobs) => (
-                jobs.schedule_with_limit(command, schedule, self.timezone.clone(), limit_num_execs),
+                jobs.schedule_with_limit(command, schedule, self.timezone, limit_num_execs),
                 false,
             ),
             Err(mut e) => {
                 log::error!(target: "scheduler::Scheduler::add_job", "{e}. Service stopped. Will still attempt to add job to schedule.");
                 (
                     e.get_mut()
-                        .schedule(command, schedule, self.timezone.clone()),
+                        .schedule(command, schedule, self.timezone),
                     true,
                 )
             }
@@ -235,7 +232,7 @@ where
 
 impl<T> Drop for Scheduler<T>
 where
-    T: TimeZone + Send + Sync + 'static,
+    T: TimeZone + Copy + Clone + Send + Sync + 'static,
     T::Offset: Send,
 {
     fn drop(&mut self) {

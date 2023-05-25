@@ -14,6 +14,7 @@ pub struct WaypointCollection {
     randolph_park_and_ride: Waypoint,
     walzem_and_mordred: Waypoint,
     midcrown_ed_white: Waypoint,
+    castle_cross_and_castle_hunt: Waypoint,
     train_tracks_on_rittiman_rd: Waypoint,
     fm78_heb: Waypoint,
 }
@@ -66,6 +67,10 @@ impl WaypointCollection {
             },
             midcrown_ed_white: Waypoint {
                 location_type: Some(LocationType::PlaceId("ChIJTzCwmUPzXIYR4iNYswS_4Dg".to_owned())),
+                ..Default::default()
+            },
+            castle_cross_and_castle_hunt: Waypoint {
+                location_type: Some(LocationType::PlaceId("ChIJuVHGigzzXIYREiAXfeeKMFM".to_owned())),
                 ..Default::default()
             },
             train_tracks_on_rittiman_rd: Waypoint {
@@ -130,5 +135,9 @@ impl WaypointCollection {
 
     pub fn midcrown_ed_white(&self) -> &Waypoint {
         &self.midcrown_ed_white
+    }
+
+    pub fn castle_cross_and_castle_hunt(&self) -> &Waypoint {
+        &self.castle_cross_and_castle_hunt
     }
 }

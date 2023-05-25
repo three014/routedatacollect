@@ -4,6 +4,7 @@ use tonic::{
     Request,
 };
 
+#[derive(Clone, Debug)]
 pub struct GoogleRoutesApiInterceptor {
     api_key: String,
     field_mask: String,

@@ -1,4 +1,4 @@
-use chrono::{TimeZone, DateTime};
+use chrono::NaiveDateTime;
 use futures::{future::BoxFuture, Future};
 
 mod job;
@@ -15,10 +15,10 @@ pub trait AsyncFn {
     fn call(&self) -> BoxFuture<'static, Result>;
 }
 
-pub enum Limit<T: TimeZone + Send + 'static> {
+pub enum Limit {
     None,
     NumTimes(usize),
-    EndDate(DateTime<T>),
+    EndDate(NaiveDateTime),
 }
 
 impl<T, F> AsyncFn for T
