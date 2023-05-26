@@ -35,7 +35,7 @@ use std::{
 ///
 /// s.start();
 /// // "Hello World!" will have printed 5 times in this duration.
-/// thread::sleep(std::time::Duration::from_secs(360));
+/// std::thread::sleep(std::time::Duration::from_secs(360));
 /// s.stop();
 /// ```
 ///
@@ -66,7 +66,7 @@ use std::{
 /// );
 /// 
 /// s.start();
-/// thread::sleep(std::time::Duration::from_secs(240));
+/// std::thread::sleep(std::time::Duration::from_secs(240));
 /// s.stop();
 /// 
 /// assert_eq!(*shared.lock().unwrap(), 3);

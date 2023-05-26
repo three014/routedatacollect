@@ -872,6 +872,7 @@ name = "job_scheduler"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "cron",
  "env_logger",
  "futures",
