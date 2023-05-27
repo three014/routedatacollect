@@ -54,7 +54,7 @@ async fn main() -> GeneralResult {
             cache::WaypointCollection, route_data_types::RouteDataRequest, RouteDataClient,
         };
         let mut client =
-            RouteDataClient::from_channel_with_key(channel, api_key.as_str(), FIELD_MASK);
+            RouteDataClient::from_channel_with_key(channel.clone(), api_key.as_str(), FIELD_MASK);
 
         let places = Box::new(WaypointCollection::new());
 

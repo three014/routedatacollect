@@ -19,19 +19,15 @@ pub type GeneralResult = Result<(), Box<dyn std::error::Error>>;
 /// 
 /// Implements `Clone` because the underlying routes client and 
 /// channel were intended to have cheap copy implementations.
-/// However, the `GoogleRoutesApiInterceptor` that inserts the 
-/// API key and field mask into the RPC calls uses `String` 
-/// to store that data, making `Clone` not as cheap as it could be.
-/// 
-/// Ideally I'd store refs to the user data with `&str` instead,
-/// but that currently requires a huge overhaul of the job scheduling
-/// system that I'm using. I hope to accomplish that soon.
+/// Furthermore, the underlying API interceptor only stores
+/// references to the API key and field mask, so cloning the
+/// entire `RouteDataClient` is still very cheap.
 #[derive(Clone, Debug)]
-pub struct RouteDataClient {
-    client: RoutesClient<InterceptedService<Channel, GoogleRoutesApiInterceptor>>,
+pub struct RouteDataClient<'a> {
+    client: RoutesClient<InterceptedService<Channel, GoogleRoutesApiInterceptor<'a>>>,
 }
 
-impl RouteDataClient {
+impl<'a> RouteDataClient<'a> {
 
     /// Returns a new `RouteDataClient` from a 
     /// `tonic::transport::Channel`, API key, and
@@ -39,13 +35,13 @@ impl RouteDataClient {
     /// copies the input `&str` values.
     pub fn from_channel_with_key(
         channel: Channel,
-        api_key: &str,
-        field_mask: &str,
-    ) -> RouteDataClient {
+        api_key: &'a str,
+        field_mask: &'a str,
+    ) -> Self {
         Self {
             client: RoutesClient::with_interceptor(
                 channel,
-                GoogleRoutesApiInterceptor::new(api_key.to_owned(), field_mask.to_owned()),
+                GoogleRoutesApiInterceptor::new(api_key, field_mask),
             ),
         }
     }

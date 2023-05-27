@@ -5,14 +5,14 @@ use tonic::{
 };
 
 #[derive(Clone, Debug)]
-pub struct GoogleRoutesApiInterceptor {
-    api_key: String,
-    field_mask: String,
+pub struct GoogleRoutesApiInterceptor<'a> {
+    api_key: &'a str,
+    field_mask: &'a str,
 }
-impl GoogleRoutesApiInterceptor {
+impl<'a> GoogleRoutesApiInterceptor<'a> {
     const API_KEY_HEADER: &'static str = "X-Goog-Api-Key";
     const FIELD_MASK_HEADER: &'static str = "X-Goog-FieldMask";
-    pub fn new(api_key: String, field_mask: String) -> Self {
+    pub fn new(api_key: &'a str, field_mask: &'a str) -> Self {
         GoogleRoutesApiInterceptor {
             api_key,
             field_mask,
@@ -20,7 +20,7 @@ impl GoogleRoutesApiInterceptor {
     }
 }
 
-impl Interceptor for GoogleRoutesApiInterceptor {
+impl Interceptor for GoogleRoutesApiInterceptor<'_> {
     fn call(&mut self, mut request: Request<()>) -> tonic::Result<Request<()>> {
         log::debug!(target: "api_interceptor::GoogleRoutesApiInterceptor::call", "Intercepting request: {:?}", request);
 
