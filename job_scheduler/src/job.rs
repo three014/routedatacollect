@@ -285,6 +285,15 @@ where
         })
     }
 
+    /// Attempts to run the next available `Job`. On success,
+    /// returns a tuple containing: 1. The `JobId` of the job that was 
+    /// just run, and 2. The `BoxFuture` of the job itself, which should 
+    /// be passed to an async runtime to be polled.
+    /// 
+    /// If the next job can't be run for some reason, the function
+    /// returns a `JobError` containing the reason for failure,
+    /// but also mutates the internal data structure so that future calls
+    /// to this function can yield the next available job.
     pub fn try_run_next(&mut self) -> Result<(JobId, BoxFuture<'static, crate::Result>), JobError> {
         let result = match self.active_jobs.pop() {
             Some(mut job) => {
@@ -309,13 +318,16 @@ where
                 }
             }
             None => {
-                log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "No more jobs in the heap, returning error.");
+                log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "No more jobs in the min heap, returning error.");
                 Err(JobError::NoMoreJobs)
             }
         };
         result
     }
 
+    /// Marks a job for removal, returning a `DescheduleError` if this fails
+    /// for any reason. On success, the next time the internal clock chooses
+    /// this job to run, it will instead delete the job.
     pub fn deschedule(&mut self, job_id: JobId) -> Result<(), DescheduleError> {
         if let std::collections::hash_map::Entry::Vacant(e) =
             self.scheduled_for_deletion.entry(job_id)

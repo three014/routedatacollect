@@ -13,12 +13,30 @@ pub mod google;
 
 pub type GeneralResult = Result<(), Box<dyn std::error::Error>>;
 
+/// A wrapper around the proto-generated Google Routes API client.
+/// Left out the `compute_route_matrix` API call because I didn't
+/// need it for this project at the moment. 
+/// 
+/// Implements `Clone` because the underlying routes client and 
+/// channel were intended to have cheap copy implementations.
+/// However, the `GoogleRoutesApiInterceptor` that inserts the 
+/// API key and field mask into the RPC calls uses `String` 
+/// to store that data, making `Clone` not as cheap as it could be.
+/// 
+/// Ideally I'd store refs to the user data with `&str` instead,
+/// but that currently requires a huge overhaul of the job scheduling
+/// system that I'm using. I hope to accomplish that soon.
 #[derive(Clone, Debug)]
 pub struct RouteDataClient {
     client: RoutesClient<InterceptedService<Channel, GoogleRoutesApiInterceptor>>,
 }
 
 impl RouteDataClient {
+
+    /// Returns a new `RouteDataClient` from a 
+    /// `tonic::transport::Channel`, API key, and
+    /// field mask. The inner interceptor
+    /// copies the input `&str` values.
     pub fn from_channel_with_key(
         channel: Channel,
         api_key: &str,
@@ -32,6 +50,10 @@ impl RouteDataClient {
         }
     }
 
+    /// Calls the actual `RoutesClient::compute_routes` method
+    /// and returns a serializable version of the `ComputeRoutesResponse`.
+    /// 
+    /// Accepts a simplified version of the `ComputeRoutesRequest` struct.
     pub async fn compute_routes(
         &mut self,
         request: RouteDataRequest,
@@ -49,15 +71,6 @@ impl RouteDataClient {
             Err(e) => Err(tonic::Status::not_found(e)),
         }
     }
-
-    /* Never used, might delete
-        pub async fn compute_route_matrix(
-            &mut self,
-            request: impl tonic::IntoRequest<ComputeRouteMatrixRequest>,
-        ) -> tonic::Result<tonic::Response<tonic::codec::Streaming<RouteMatrixElement>>> {
-            self.client.compute_route_matrix(request).await
-        }
-    */
 }
 
 pub mod route_data_types {
@@ -69,6 +82,8 @@ pub mod route_data_types {
     };
     use crate::server::google::maps::routing::v2::{waypoint::LocationType, Waypoint};
 
+    /// A simplified version of the `ComputeRoutesRequest` struct used
+    /// for Google's Routes API.
     pub struct RouteDataRequest {
         pub origin: Location,
         pub destination: Location,

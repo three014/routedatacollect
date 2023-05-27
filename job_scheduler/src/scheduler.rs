@@ -342,7 +342,9 @@ where
     }
 
     /// Removes a job from the scheduler. Any active executions of this job
-    /// will be allowed to complete, but all future jobs will not execute
+    /// will be allowed to complete, but all future jobs will not execute.
+    /// 
+    /// Returns a `DescheduleError` on failure to remove the job.
     pub fn remove_job(&mut self, id: JobId) -> Result<(), job::DescheduleError> {
         let (result, should_stop_service) = match self.job_board.lock() {
             Ok(mut jobs) => (jobs.deschedule(id), false),
