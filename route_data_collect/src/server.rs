@@ -1,116 +1,138 @@
+use std::fmt::Display;
+
 use self::{
     api_interceptor::GoogleRoutesApiInterceptor,
-    db::SerializableRouteResponse,
+    data_types::{RouteDataRequest, SerializableRouteResponse},
+    db::AsyncDb,
     google::maps::routing::v2::{routes_client::RoutesClient, ComputeRoutesRequest},
-    route_data_types::RouteDataRequest,
 };
+use mongodb::results::InsertOneResult;
 use tonic::{codegen::InterceptedService, transport::Channel};
 
-pub mod api_interceptor;
+mod api_interceptor;
 pub mod cache;
-pub mod db;
-pub mod google;
+pub mod data_types;
+mod db;
+mod google;
 
 pub type GeneralResult = Result<(), Box<dyn std::error::Error>>;
 
+#[derive(Debug)]
+pub enum Error {
+    SerializeFailed(bson::ser::Error),
+    DbNotConnected(&'static str),
+    DbError(mongodb::error::Error),
+    RpcError(tonic::Status),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::SerializeFailed(ser) => writeln!(f, "{}", ser),
+            Error::DbNotConnected(no_conn) => writeln!(f, "{}", no_conn),
+            Error::DbError(db) => writeln!(f, "{}", db),
+            Error::RpcError(rpc) => writeln!(f, "{}", rpc),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 /// A wrapper around the proto-generated Google Routes API client.
 /// Left out the `compute_route_matrix` API call because I didn't
-/// need it for this project at the moment. 
-/// 
-/// Implements `Clone` because the underlying routes client and 
+/// need it for this project at the moment.
+///
+/// Implements `Clone` because the underlying routes client and
 /// channel were intended to have cheap copy implementations.
 /// Furthermore, the underlying API interceptor only stores
 /// references to the API key and field mask, so cloning the
 /// entire `RouteDataClient` is still very cheap.
 #[derive(Clone, Debug)]
-pub struct RouteDataClient<'a> {
+pub struct RouteDataService<'a> {
     client: RoutesClient<InterceptedService<Channel, GoogleRoutesApiInterceptor<'a>>>,
+    db: Option<AsyncDb>,
 }
 
-impl<'a> RouteDataClient<'a> {
-
-    /// Returns a new `RouteDataClient` from a 
-    /// `tonic::transport::Channel`, API key, and
-    /// field mask. The inner interceptor
-    /// copies the input `&str` values.
-    pub fn from_channel_with_key(
-        channel: Channel,
-        api_key: &'a str,
-        field_mask: &'a str,
-    ) -> Self {
-        Self {
+impl<'a: 'b, 'b> RouteDataService<'a> {
+    pub async fn with(
+        settings: Settings<'a, 'b>,
+    ) -> Result<RouteDataService<'a>, mongodb::error::Error> {
+        Ok(Self {
             client: RoutesClient::with_interceptor(
-                channel,
-                GoogleRoutesApiInterceptor::new(api_key, field_mask),
+                settings.channel,
+                GoogleRoutesApiInterceptor::new(settings.api_key, settings.field_mask),
             ),
-        }
+            db: match settings.connection_uri {
+                Some(uri) => Some(AsyncDb::try_from(uri).await?),
+                None => None,
+            },
+        })
+    }
+
+    pub async fn add_db_with_uri(
+        &mut self,
+        conn_uri: &'b str,
+    ) -> Result<&mut RouteDataService<'a>, Error> {
+        self.db = Some(AsyncDb::try_from(conn_uri).await.map_err(Error::DbError)?);
+        Ok(self)
+    }
+
+    pub fn add_db(&mut self, db: AsyncDb) -> &mut Self {
+        self.db = Some(db);
+        self
     }
 
     /// Calls the actual `RoutesClient::compute_routes` method
     /// and returns a serializable version of the `ComputeRoutesResponse`.
-    /// 
+    ///
     /// Accepts a simplified version of the `ComputeRoutesRequest` struct.
     pub async fn compute_routes(
         &mut self,
         request: RouteDataRequest,
-    ) -> tonic::Result<SerializableRouteResponse> {
+    ) -> Result<SerializableRouteResponse, Error> {
         let origin = request.origin.clone();
         let destination = request.destination.clone();
         let request: ComputeRoutesRequest = request.into();
-        let response = self.client.compute_routes(request).await?;
+        let response = self
+            .client
+            .compute_routes(request)
+            .await
+            .map_err(Error::RpcError)?;
         match SerializableRouteResponse::try_from_response_with_orig_and_dest(
             origin,
             destination,
             response,
         ) {
             Ok(response) => Ok(response),
-            Err(e) => Err(tonic::Status::not_found(e)),
+            Err(e) => Err(Error::RpcError(tonic::Status::not_found(e))),
+        }
+    }
+
+    pub async fn save_to_db(
+        &self,
+        response: SerializableRouteResponse,
+    ) -> Result<InsertOneResult, Error> {
+        match &self.db {
+            Some(db) => Ok(db
+                .add_doc(
+                    "routes",
+                    "utsa_to_heb",
+                    bson::to_bson(&response)
+                        .map_err(Error::SerializeFailed)?
+                        .as_document()
+                        .unwrap(),
+                )
+                .await
+                .map_err(Error::DbError)?),
+            None => Err(Error::DbNotConnected("no database connected to service")),
         }
     }
 }
 
-pub mod route_data_types {
-    use super::{
-        db::Location,
-        google::maps::routing::v2::{
-            ComputeRoutesRequest, RouteTravelMode, RoutingPreference, Units,
-        },
-    };
-    use crate::server::google::maps::routing::v2::{waypoint::LocationType, Waypoint};
-
-    /// A simplified version of the `ComputeRoutesRequest` struct used
-    /// for Google's Routes API.
-    pub struct RouteDataRequest {
-        pub origin: Location,
-        pub destination: Location,
-        pub intermediates: Vec<Location>,
-    }
-
-    impl From<RouteDataRequest> for ComputeRoutesRequest {
-        fn from(value: RouteDataRequest) -> ComputeRoutesRequest {
-            ComputeRoutesRequest {
-                origin: Some(Waypoint {
-                    location_type: Some(LocationType::PlaceId(value.origin.place_id)),
-                    ..Default::default()
-                }),
-                destination: Some(Waypoint {
-                    location_type: Some(LocationType::PlaceId(value.destination.place_id)),
-                    ..Default::default()
-                }),
-                intermediates: value
-                    .intermediates
-                    .into_iter()
-                    .map(|location| Waypoint {
-                        location_type: Some(LocationType::PlaceId(location.place_id)),
-                        ..Default::default()
-                    })
-                    .collect(),
-                routing_preference: RoutingPreference::TrafficAwareOptimal.into(),
-                travel_mode: RouteTravelMode::Drive.into(),
-                units: Units::Imperial.into(),
-                language_code: "en-US".to_owned(),
-                ..Default::default()
-            }
-        }
-    }
+#[derive(Clone)]
+pub struct Settings<'a: 'b, 'b> {
+    pub channel: Channel,
+    pub api_key: &'a str,
+    pub field_mask: &'a str,
+    pub connection_uri: Option<&'b str>,
 }

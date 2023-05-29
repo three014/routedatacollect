@@ -1,9 +1,9 @@
 use crate::server::GeneralResult;
-use bson::Document;
 use chrono::NaiveDate;
 use job_scheduler::scheduler::Scheduler;
-use mongodb::{options::ClientOptions, Client};
+use server::{RouteDataService, Settings};
 use std::{io::Write, time::Duration};
+use tokio::sync::OnceCell;
 use tonic::transport::Channel;
 
 mod server;
@@ -17,23 +17,30 @@ const SERVER_ADDR: &str = "https://routes.googleapis.com:443";
 const FIELD_MASK: &str = "routes.distanceMeters,routes.duration,routes.staticDuration";
 //const FIELD_MASK: &str = "*";
 
+static API_KEY: OnceCell<String> = OnceCell::const_new();
+static DB_URI: OnceCell<String> = OnceCell::const_new();
+
 /// Entry point to the server. Configure database and google api connections, start schedule
 /// for pinging Google Routes API for data from UTSA to the HEB on FM-78.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> GeneralResult {
-    env_logger::builder()
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "{} {:<5} {:<28} {}",
-                chrono::Local::now().format("%d/%m/%Y %H:%M:%S"),
-                record.level(),
-                record.module_path().unwrap_or(""),
-                record.args()
-            )
+    init_logger();
+
+    let api_key = API_KEY
+        .get_or_try_init(|| async {
+            std::env::var("API_KEY").map_err(|_| "missing API_KEY environment variable")
         })
-        .init();
-    let api_key = std::env::var("API_KEY").map_err(|_| "Missing API_KEY environment variable")?;
+        .await?
+        .as_str();
+
+    let db_uri = DB_URI
+        .get_or_try_init(|| async {
+            std::env::var("CONN_URI")
+                .map_err(|_| "missing CONN_URI environment variable for database")
+        })
+        .await?
+        .as_str();
+
     let mut scheduler = Scheduler::with_timezone(chrono_tz::America::Chicago);
     let every_day_starting_from_school = "00 16 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
@@ -42,19 +49,17 @@ async fn main() -> GeneralResult {
         .keep_alive_while_idle(true)
         .connect()
         .await?;
-    let mongo_uri = std::env::var("CONN_URI")
-        .map_err(|_| "Missing CONN_URI environment variable for mongodb")?;
-    let mongo = Client::with_options(ClientOptions::parse_async(mongo_uri).await?)?;
-    let utsa_to_heb = mongo
-        .database("routes")
-        .collection::<Document>("utsa_to_heb");
 
-    let fut = move || async move {
-        use crate::server::{
-            cache::WaypointCollection, route_data_types::RouteDataRequest, RouteDataClient,
-        };
-        let mut client =
-            RouteDataClient::from_channel_with_key(channel.clone(), api_key.as_str(), FIELD_MASK);
+    let mut svc = RouteDataService::with(Settings {
+        channel,
+        api_key,
+        field_mask: FIELD_MASK,
+        connection_uri: Some(db_uri),
+    })
+    .await?;
+
+    let job = move || async move {
+        use crate::server::{cache::WaypointCollection, data_types::RouteDataRequest};
 
         let places = Box::new(WaypointCollection::new());
 
@@ -82,10 +87,8 @@ async fn main() -> GeneralResult {
             ],
         };
 
-        let response = client.compute_routes(req).await?;
-        utsa_to_heb
-            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
-            .await?;
+        let response = svc.compute_routes(req).await?;
+        svc.save_to_db(response).await?;
         tokio::time::sleep(chrono::Duration::minutes(26).to_std()?).await;
 
         // Create request from Martin Opposite Leona to Heb
@@ -108,10 +111,8 @@ async fn main() -> GeneralResult {
             ],
         };
 
-        let response = client.compute_routes(req).await?;
-        utsa_to_heb
-            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
-            .await?;
+        let response = svc.compute_routes(req).await?;
+        svc.save_to_db(response).await?;
         tokio::time::sleep(chrono::Duration::minutes(43).to_std()?).await;
 
         // Create request from Randolph Park and Ride to Heb
@@ -129,10 +130,8 @@ async fn main() -> GeneralResult {
             ],
         };
 
-        let response = client.compute_routes(req).await?;
-        utsa_to_heb
-            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
-            .await?;
+        let response = svc.compute_routes(req).await?;
+        svc.save_to_db(response).await?;
         tokio::time::sleep(chrono::Duration::minutes(14).to_std()?).await;
 
         // Create request from Train Tracks at Rittiman to Heb
@@ -144,21 +143,19 @@ async fn main() -> GeneralResult {
             intermediates: vec![places.train_tracks_on_rittiman_rd().clone()],
         };
 
-        let response = client.compute_routes(req).await?;
-        utsa_to_heb
-            .insert_one(bson::to_bson(&response)?.as_document().unwrap(), None)
-            .await?;
+        let response = svc.compute_routes(req).await?;
+        svc.save_to_db(response).await?;
 
         Ok(())
     };
 
-    scheduler.start();
     let october_15th = NaiveDate::from_ymd_opt(2023, 10, 15)
         .unwrap()
         .and_hms_opt(13, 0, 0)
         .unwrap();
+    scheduler.start();
     scheduler.add_job(
-        fut,
+        job,
         every_day_starting_from_school,
         job_scheduler::Limit::EndDate(october_15th),
     );
@@ -179,4 +176,19 @@ async fn main() -> GeneralResult {
     scheduler.stop();
 
     Ok(())
+}
+
+fn init_logger() {
+    env_logger::builder()
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{} {:<5} {:<28} {}",
+                chrono::Local::now().format("%d/%m/%Y %H:%M:%S"),
+                record.level(),
+                record.module_path().unwrap_or(""),
+                record.args()
+            )
+        })
+        .init();
 }

@@ -1,81 +1,36 @@
-use crate::server::google::maps::routing::v2::ComputeRoutesResponse;
-use chrono::{DateTime, FixedOffset};
-use serde::{de::Visitor, Deserialize, Serialize};
+use std::borrow::Borrow;
 
-struct DateTimeWrapper(DateTime<FixedOffset>);
+use bson::Document;
+use mongodb::results::InsertOneResult;
+use serde::Serialize;
 
-impl Serialize for DateTimeWrapper {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.0.to_rfc2822().as_str())
-    }
+#[derive(Clone, Debug)]
+pub struct AsyncDb {
+    client: mongodb::Client,
 }
 
-impl<'de> Deserialize<'de> for DateTimeWrapper {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct DateTimeVisitor;
-
-        impl<'de> Visitor<'de> for DateTimeVisitor {
-            type Value = DateTimeWrapper;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("date in rfc2822 format")
-            }
-
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match DateTime::parse_from_rfc2822(v) {
-                    Ok(date) => Ok(DateTimeWrapper(date)),
-                    Err(_) => Err(E::invalid_value(serde::de::Unexpected::Str(v), &self)),
-                }
-            }
-        }
-        deserializer.deserialize_newtype_struct("DateTimeWrapper", DateTimeVisitor)
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct SerializableRouteResponse {
-    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    id: Option<mongodb::bson::oid::ObjectId>,
-    origin: Location,
-    destination: Location,
-    date: DateTimeWrapper,
-    response: ComputeRoutesResponse,
-}
-
-impl SerializableRouteResponse {
-    pub fn try_from_response_with_orig_and_dest(
-        origin: Location,
-        destination: Location,
-        response: tonic::Response<ComputeRoutesResponse>,
-    ) -> Result<Self, String> {
-        let date = response
-            .metadata()
-            .get("date")
-            .ok_or("Response metadata has no \"date\" field.")?
-            .to_str()
-            .map_err(|e| e.to_string())?;
-        let date = DateTime::parse_from_rfc2822(date).map_err(|e| e.to_string())?;
-        Ok(Self {
-            id: None,
-            date: DateTimeWrapper(date),
-            origin,
-            destination,
-            response: response.into_inner(),
+impl AsyncDb {
+    pub async fn try_from(value: &str) -> Result<AsyncDb, mongodb::error::Error> {
+        Ok(AsyncDb {
+            client: mongodb::Client::with_options(
+                mongodb::options::ClientOptions::parse_async(value).await?,
+            )?,
         })
     }
-}
 
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct Location {
-    pub address: String,
-    pub place_id: String,
+    pub async fn add_doc<T>(
+        &self,
+        db: &str,
+        coll: &str,
+        doc: T,
+    ) -> Result<InsertOneResult, mongodb::error::Error>
+    where
+        T: Serialize + Borrow<Document>,
+    {
+        self.client
+            .database(db)
+            .collection::<Document>(coll)
+            .insert_one(doc, None)
+            .await
+    }
 }

@@ -1,4 +1,4 @@
-use super::db::Location;
+use super::data_types::Location;
 
 /// An immutable collection of frequently used waypoints for my project.
 /// Very large struct, would recommend passing this by reference until

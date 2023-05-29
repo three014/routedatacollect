@@ -8,7 +8,7 @@ default-run = "routedatacollect-server"
 
 [dependencies]
 prost = { version = "0.11.9", features = ["prost-derive"] }
-tokio = { version = "1.28.0", features = ["rt", "rt-multi-thread", "signal"] }
+tokio = { version = "1.28.0", features = ["rt", "rt-multi-thread", "signal", "sync", "parking_lot"] }
 tonic = { version = "0.9.2", features = ["transport", "channel", "codegen", "tls", "tls-roots", "tls-webpki-roots", "prost", "gzip"] }
 serde = { version = "1.0.160", features = ["derive"] }
 prost-types = "0.11.9"
