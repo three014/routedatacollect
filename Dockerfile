@@ -1,5 +1,6 @@
 FROM rust:slim-buster AS base
 
+RUN apt install -y git
 RUN mkdir /root/google && cd /root/google && git clone https://github.com/three014/googleapis.git
 WORKDIR /code
 RUN cargo init
@@ -10,6 +11,7 @@ COPY . /code
 ARG PB_REL="https://github.com/protocolbuffers/protobuf/releases"
 RUN curl -LO $PB_REL/download/v3.15.8/protoc-3.15.8-linux-x86_64.zip && unzip protoc-3.15.8-linux-x86_64.zip -d /usr/local && chmod a+x /usr/local/bin/protoc
 RUN cargo fetch
+RUN apt purge --auto-remove -y git
 
 FROM base AS development
 
