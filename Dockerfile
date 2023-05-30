@@ -1,4 +1,4 @@
-FROM rust:buster-slim AS base
+FROM rust:slim-buster AS base
 
 RUN mkdir /root/google && cd /root/google && git clone https://github.com/three014/googleapis.git
 WORKDIR /code
