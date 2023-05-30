@@ -1,11 +1,11 @@
-name: rust-mongo
+name: route
 services:
   backend:
     build:
       context: ./
-      target: development
+      target: builder
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
       - CONN_URI=mongodb://root:example@mongo
     env_file:
       - ./route_data_collect/api.env
@@ -18,9 +18,10 @@ services:
       - backend-cache:/code/target
     depends_on:
       - mongo
+    tty: true
 
   mongo:
-    image: mongo
+    image: mongo:4.4.6
     restart: always
     environment:
       - MONGO_INITDB_ROOT_USERNAME=root
@@ -29,6 +30,7 @@ services:
       - server-side
     volumes:
       - mongo:/data
+    tty: true
 
 networks:
   server-side: {}

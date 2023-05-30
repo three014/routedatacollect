@@ -69,19 +69,6 @@ impl<'a: 'b, 'b> RouteDataService<'a> {
         })
     }
 
-    pub async fn add_db_with_uri(
-        &mut self,
-        conn_uri: &'b str,
-    ) -> Result<&mut RouteDataService<'a>, Error> {
-        self.db = Some(AsyncDb::try_from(conn_uri).await.map_err(Error::DbError)?);
-        Ok(self)
-    }
-
-    pub fn add_db(&mut self, db: AsyncDb) -> &mut Self {
-        self.db = Some(db);
-        self
-    }
-
     /// Calls the actual `RoutesClient::compute_routes` method
     /// and returns a serializable version of the `ComputeRoutesResponse`.
     ///

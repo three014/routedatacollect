@@ -17,7 +17,6 @@ pub fn runner(
     running_jobs_report: Arc<RwLock<RunningJobs>>,
 ) {
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
         .enable_all()
         .build()
         .unwrap();
