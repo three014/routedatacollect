@@ -1,12 +1,13 @@
-name: route
+version: "2.2"
 services:
   backend:
     build:
       context: ./
-      target: builder
+      target: release
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=debug
       - CONN_URI=mongodb://root:example@mongo
+      - LOG_FILE=/var/log/routedatacollect/server_log.txt
     env_file:
       - ./route_data_collect/api.env
     networks:
@@ -15,7 +16,9 @@ services:
       - ./route_data_collect/src:/code/route_data_collect/src
       - ./route_data_collect/google_protos:/code/route_data_collect/google_protos
       - ./job_scheduler/src:/code/job_scheduler/src
+      - ./logs:/code/logs
       - backend-cache:/code/target
+      - logs:/var/log/routedatacollect/
     depends_on:
       - mongo
     tty: true
@@ -30,12 +33,12 @@ services:
       - server-side
     volumes:
       - mongo:/data
-    tty: true
 
 networks:
   server-side: {}
 
 volumes:
   backend-cache: {}
+  logs: {}
   mongo:
     driver: local

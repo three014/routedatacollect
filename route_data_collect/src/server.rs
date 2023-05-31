@@ -21,8 +21,8 @@ pub type GeneralResult = Result<(), Box<dyn std::error::Error>>;
 pub enum Error {
     SerializeFailed(bson::ser::Error),
     DbNotConnected(&'static str),
-    DbError(mongodb::error::Error),
-    RpcError(tonic::Status),
+    Db(mongodb::error::Error),
+    Rpc(tonic::Status),
 }
 
 impl Display for Error {
@@ -30,8 +30,8 @@ impl Display for Error {
         match self {
             Error::SerializeFailed(ser) => writeln!(f, "{}", ser),
             Error::DbNotConnected(no_conn) => writeln!(f, "{}", no_conn),
-            Error::DbError(db) => writeln!(f, "{}", db),
-            Error::RpcError(rpc) => writeln!(f, "{}", rpc),
+            Error::Db(db) => writeln!(f, "{}", db),
+            Error::Rpc(rpc) => writeln!(f, "{}", rpc),
         }
     }
 }
@@ -54,16 +54,14 @@ pub struct RouteDataService<'a> {
 }
 
 impl<'a: 'b, 'b> RouteDataService<'a> {
-    pub async fn with(
-        settings: Settings<'a, 'b>,
-    ) -> Result<RouteDataService<'a>, mongodb::error::Error> {
+    pub async fn with(settings: Settings<'a, 'b>) -> Result<RouteDataService<'a>, Error> {
         Ok(Self {
             client: RoutesClient::with_interceptor(
                 settings.channel,
                 GoogleRoutesApiInterceptor::new(settings.api_key, settings.field_mask),
             ),
             db: match settings.connection_uri {
-                Some(uri) => Some(AsyncDb::try_from(uri).await?),
+                Some(uri) => Some(AsyncDb::try_from(uri).await.map_err(Error::Db)?),
                 None => None,
             },
         })
@@ -84,14 +82,14 @@ impl<'a: 'b, 'b> RouteDataService<'a> {
             .client
             .compute_routes(request)
             .await
-            .map_err(Error::RpcError)?;
+            .map_err(Error::Rpc)?;
         match SerializableRouteResponse::try_from_response_with_orig_and_dest(
             origin,
             destination,
             response,
         ) {
             Ok(response) => Ok(response),
-            Err(e) => Err(Error::RpcError(tonic::Status::not_found(e))),
+            Err(e) => Err(Error::Rpc(tonic::Status::not_found(e))),
         }
     }
 
@@ -110,7 +108,7 @@ impl<'a: 'b, 'b> RouteDataService<'a> {
                         .unwrap(),
                 )
                 .await
-                .map_err(Error::DbError)?),
+                .map_err(Error::Db)?),
             None => Err(Error::DbNotConnected("no database connected to service")),
         }
     }

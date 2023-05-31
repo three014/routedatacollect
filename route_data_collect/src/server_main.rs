@@ -20,29 +20,31 @@ const FIELD_MASK: &str = "routes.distanceMeters,routes.duration,routes.staticDur
 static API_KEY: OnceCell<String> = OnceCell::const_new();
 static DB_URI: OnceCell<String> = OnceCell::const_new();
 
-/// Entry point to the server. Configure database and google api connections, start schedule
-/// for pinging Google Routes API for data from UTSA to the HEB on FM-78.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> GeneralResult {
-    init_logger();
+    if let Err(e) = init_logger() {
+        eprintln!("Couldn't initialize global logger: {e}");
+        return Err(e);
+    }
+    println!("Program start!");
 
-    let api_key = API_KEY
-        .get_or_try_init(|| async {
-            std::env::var("API_KEY").map_err(|_| "missing API_KEY environment variable")
-        })
-        .await?
-        .as_str();
+    if let Err(e) = actual_main().await {
+        log::error!("{e}");
+        return Err(e);
+    }
 
-    let db_uri = DB_URI
-        .get_or_try_init(|| async {
-            std::env::var("CONN_URI")
-                .map_err(|_| "missing CONN_URI environment variable for database")
-        })
-        .await?
-        .as_str();
+    Ok(())
+}
+
+/// Entry point to the server. Configure database and google api connections, start schedule
+/// for pinging Google Routes API for data from UTSA to the HEB on FM-78.
+async fn actual_main() -> GeneralResult {
+    let api_key = api_key().await?;
+    let db_uri = db_uri().await?;
 
     let mut scheduler = Scheduler::with_timezone(chrono_tz::America::Chicago);
-    let every_day_starting_from_school = "00 16 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
+    let every_day_starting_from_school =
+        "00 16 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
     let channel = Channel::from_static(SERVER_ADDR)
         .timeout(Duration::from_secs(2))
@@ -62,8 +64,6 @@ async fn main() -> GeneralResult {
         use crate::server::{cache::WaypointCollection, data_types::RouteDataRequest};
 
         let places = Box::new(WaypointCollection::new());
-
-        println!("Doing the cool route stuff");
 
         // Create request from Utsa to Heb
         // Send request, get response
@@ -178,17 +178,48 @@ async fn main() -> GeneralResult {
     Ok(())
 }
 
-fn init_logger() {
+fn init_logger() -> GeneralResult {
     env_logger::builder()
         .format(|buf, record| {
             writeln!(
                 buf,
                 "{} {:<5} {:<28} {}",
-                chrono::Local::now().format("%d/%m/%Y %H:%M:%S"),
+                chrono::Local::now().format("%m/%d/%Y %H:%M:%S"),
                 record.level(),
                 record.module_path().unwrap_or(""),
                 record.args()
             )
         })
+        .target(if let Ok(log_file) = std::env::var("LOG_FILE") {
+            let file = std::fs::File::options()
+                .append(true)
+                .create(true)
+                .open(log_file)?;
+            let writer = std::io::LineWriter::new(file);
+            env_logger::Target::Pipe(Box::new(writer))
+        } else {
+            env_logger::Target::Stderr
+        })
         .init();
+
+    Ok(())
+}
+
+async fn api_key() -> Result<&'static str, &'static str> {
+    Ok(API_KEY
+        .get_or_try_init(|| async {
+            std::env::var("API_KEY").map_err(|_| "missing API_KEY environment variable")
+        })
+        .await?
+        .as_str())
+}
+
+async fn db_uri() -> Result<&'static str, &'static str> {
+    Ok(DB_URI
+        .get_or_try_init(|| async {
+            std::env::var("CONN_URI")
+                .map_err(|_| "missing CONN_URI environment variable for database")
+        })
+        .await?
+        .as_str())
 }
