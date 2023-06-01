@@ -9,14 +9,13 @@ services:
       - CONN_URI=mongodb://root:example@mongo
       - LOG_FILE=/var/log/routedatacollect/server_log.txt
     env_file:
-      - ./route_data_collect/api.env
+      - ./routedatacollect/api.env
     networks:
       - server-side
     volumes:
-      - ./route_data_collect/src:/code/route_data_collect/src
-      - ./route_data_collect/google_protos:/code/route_data_collect/google_protos
+      - ./routedatacollect/src:/code/routedatacollect/src
+      - ./routedatacollect/google_protos:/code/routedatacollect/google_protos
       - ./job_scheduler/src:/code/job_scheduler/src
-      - ./logs:/code/logs
       - backend-cache:/code/target
       - logs:/var/log/routedatacollect/
     depends_on:
