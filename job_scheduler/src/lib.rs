@@ -1,9 +1,10 @@
+pub use self::scheduler::Scheduler;
 use chrono::NaiveDateTime;
 use futures::{future::BoxFuture, Future};
 
 mod job;
 mod runner;
-pub mod scheduler;
+mod scheduler;
 
 pub type Result =
     core::result::Result<(), Box<dyn std::error::Error + core::marker::Send + core::marker::Sync>>;

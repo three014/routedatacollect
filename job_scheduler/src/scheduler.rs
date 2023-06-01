@@ -1,6 +1,5 @@
 use crate::{job, runner, AsyncFn, JobId};
 use chrono::{TimeZone, Utc};
-use cron::Schedule;
 use futures::future::BoxFuture;
 use std::{
     sync::{mpsc, Arc, Condvar, Mutex},
@@ -21,7 +20,7 @@ use std::{
 /// # Example
 ///
 /// ```
-/// use job_scheduler::{Limit, scheduler::Scheduler};
+/// use job_scheduler::{Limit, Scheduler};
 ///
 /// let mut s = Scheduler::with_timezone(chrono_tz::America::Chicago);
 /// s.add_job(
@@ -39,8 +38,8 @@ use std::{
 /// s.stop();
 /// ```
 ///
-/// A `Job` is an `impl FnOnce + Clone + Send` function pointer or closure
-/// that returns an `impl Future + Send` with the return type of
+/// A `Job` is an `impl FnOnce + Clone + Send + 'static` function pointer or closure
+/// that returns an `impl Future + Send + 'static` with the return type of
 /// `Result<(), Box<dyn Error + Send + Sync>>`. This means that a job
 /// can be used to mutate a shared state, so long as all items in the job
 /// implement `Clone` and `Send`.
@@ -48,7 +47,7 @@ use std::{
 /// # Example using Shared-State
 ///
 /// ```
-/// use job_scheduler::{Limit, scheduler::Scheduler};
+/// use job_scheduler::{Limit, Scheduler};
 /// use std::sync::{Arc, Mutex};
 ///
 /// let mut s = Scheduler::with_timezone(chrono_tz::America::Chicago);
@@ -64,11 +63,11 @@ use std::{
 ///     "00 * * * * *".parse().unwrap(),
 ///     Limit::NumTimes(3),
 /// );
-/// 
+///
 /// s.start();
 /// std::thread::sleep(std::time::Duration::from_secs(240));
 /// s.stop();
-/// 
+///
 /// assert_eq!(*shared.lock().unwrap(), 3);
 /// ```
 ///
@@ -160,11 +159,11 @@ where
 
     /// Starts the scheduling service, which consists
     /// of the internal clock, which determines the soonest job
-    /// to run and creates the `Future` from that job, and the "runner", 
+    /// to run and creates the `Future` from that job, and the "runner",
     /// which holds the async runtime and subsequently polls the futures
     /// given to it.
-    /// 
-    /// `start` can be called multiple times, but only does anything 
+    ///
+    /// `start` can be called multiple times, but only does anything
     /// if the service is not already active.
     pub fn start(&mut self) {
         if self.active() {
@@ -199,7 +198,12 @@ where
                 runner::runner(reciever, sleep_for_runner, running_jobs_report);
             });
 
-            while *running.0.lock().unwrap() {
+            while {
+                match running.0.lock() {
+                    Ok(guard) => *guard,
+                    Err(_) => false, // If main thread panicked, stop service.
+                }
+            } {
                 let mut state = ClockState::Pass;
                 let mut jobs = jobs.lock().unwrap();
 
@@ -211,9 +215,7 @@ where
                         log::debug!(target: "scheduler::process_manager_thread", "Can't run yet, time is in the future: {:?}.", then);
                         let diff = then - now;
 
-                        state = ClockState::Sleep(
-                            diff.to_std().unwrap_or(Duration::from_secs(0)),
-                        );
+                        state = ClockState::Sleep(diff.to_std().unwrap_or(Duration::from_secs(0)));
                     } else {
                         log::debug!(target: "scheduler::process_manager_thread", "Attempting to exec job.");
                         if let Ok(job) = jobs.try_run_next() {
@@ -223,8 +225,7 @@ where
                         }
                     }
                 } else {
-                    state =
-                        ClockState::Sleep(Duration::from_secs(Self::SECONDS_IN_AN_HOUR));
+                    state = ClockState::Sleep(Duration::from_secs(Self::SECONDS_IN_AN_HOUR));
                 }
 
                 drop(jobs);
@@ -269,16 +270,16 @@ where
         }));
     }
 
-    /// Stops the scheduling service, giving all currently running 
+    /// Stops the scheduling service, giving all currently running
     /// jobs about 5 seconds to finish before terminating them automatically.
-    /// 
+    ///
     /// Does not remove jobs from the internal queue, so calling `start` will
     /// resume the internal clock and pick/run the next available job.
-    /// 
-    /// `stop` can be called multiple times, but only does anything if 
+    ///
+    /// `stop` can be called multiple times, but only does anything if
     /// the service is active.
-    /// 
-    /// The scheduler will automatically call `stop` when the scheduler itself 
+    ///
+    /// The scheduler will automatically call `stop` when the scheduler itself
     /// is dropped, due to the custom `Drop` implementation.
     pub fn stop(&mut self) {
         if !self.active() {
@@ -295,20 +296,36 @@ where
         log::info!(target: "scheduler::Scheduler::stop", "Stopped.");
     }
 
+    /// Stops and starts the scheduling service, following the rules of 
+    /// `stop` and `start`, in that order.
     pub fn restart(&mut self) {
         log::info!(target: "schedule::Scheduler::restart", "Restarting service.");
         self.stop();
         self.start();
     }
 
+    /// Returns whether the service is actively running.
     pub fn active(&self) -> bool {
         self.clock.is_some() && *self.service_running.0.lock().unwrap()
     }
 
+    /// Adds a new job to the scheduler. Refer to [`Scheduler`] for more
+    /// information on what a `Job` function looks like. 
+    /// 
+    /// Along with the function, the user must also supply a `cron::Schedule`,
+    /// which can be parsed from a string using the `parse` method, and 
+    /// a `job_scheduler::Limit` if the user desires to automatically stop
+    /// scheduling this job at some point later-on.
+    /// 
+    /// `add_job` cannot panic nor fail, but in the case that the service had
+    /// crashed, the scheduler will still add the job to the queue.
+    /// 
+    /// Returns a `JobId` which is just a `u32` for the job just submitted.
+    /// This can be used later to remove the job manually if desired.
     pub fn add_job<C>(
         &mut self,
         command: C,
-        schedule: Schedule,
+        schedule: cron::Schedule,
         limit_num_execs: crate::Limit,
     ) -> JobId
     where
@@ -343,7 +360,7 @@ where
 
     /// Removes a job from the scheduler. Any active executions of this job
     /// will be allowed to complete, but all future jobs will not execute.
-    /// 
+    ///
     /// Returns a `DescheduleError` on failure to remove the job.
     pub fn remove_job(&mut self, id: JobId) -> Result<(), job::DescheduleError> {
         let (result, should_stop_service) = match self.job_board.lock() {

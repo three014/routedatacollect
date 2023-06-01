@@ -1,6 +1,6 @@
 [workspace]
 
 members = [
-    "route_data_collect",
+    "routedatacollect",
     "job_scheduler",
 ]

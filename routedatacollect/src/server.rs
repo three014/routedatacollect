@@ -1,17 +1,17 @@
-use std::fmt::Display;
-
+pub use self::cache::WaypointCollection;
+pub use self::data_types::{Location, RouteDataRequest, SerializableRouteResponse};
 use self::{
     api_interceptor::GoogleRoutesApiInterceptor,
-    data_types::{RouteDataRequest, SerializableRouteResponse},
     db::AsyncDb,
     google::maps::routing::v2::{routes_client::RoutesClient, ComputeRoutesRequest},
 };
 use mongodb::results::InsertOneResult;
+use std::fmt::Display;
 use tonic::{codegen::InterceptedService, transport::Channel};
 
 mod api_interceptor;
-pub mod cache;
-pub mod data_types;
+mod cache;
+mod data_types;
 mod db;
 mod google;
 

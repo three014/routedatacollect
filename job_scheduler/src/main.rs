@@ -1,8 +1,7 @@
-use std::{thread, time::Duration};
-
 use chrono::Local;
 use cron::Schedule;
-use job_scheduler::scheduler::Scheduler;
+use job_scheduler::Scheduler;
+use std::{thread, time::Duration};
 
 fn main() {
     env_logger::init();

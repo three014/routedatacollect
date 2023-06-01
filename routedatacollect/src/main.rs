@@ -1,12 +1,12 @@
 use crate::server::GeneralResult;
 use chrono::NaiveDate;
-use job_scheduler::scheduler::Scheduler;
+use job_scheduler::Scheduler;
 use server::{RouteDataService, Settings};
 use std::{io::Write, time::Duration};
 use tokio::sync::OnceCell;
 use tonic::transport::Channel;
 
-mod server;
+pub mod server;
 
 const SERVER_ADDR: &str = "https://routes.googleapis.com:443";
 // Note that setting the field mask to * is OK for
@@ -28,7 +28,7 @@ async fn main() -> GeneralResult {
     }
     println!("Program start!");
 
-    if let Err(e) = actual_main().await {
+    if let Err(e) = start().await {
         log::error!("{e}");
         return Err(e);
     }
@@ -38,13 +38,12 @@ async fn main() -> GeneralResult {
 
 /// Entry point to the server. Configure database and google api connections, start schedule
 /// for pinging Google Routes API for data from UTSA to the HEB on FM-78.
-async fn actual_main() -> GeneralResult {
+async fn start() -> GeneralResult {
     let api_key = api_key().await?;
     let db_uri = db_uri().await?;
 
     let mut scheduler = Scheduler::with_timezone(chrono_tz::America::Chicago);
-    let every_day_starting_from_school =
-        "00 16 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
+    let every_day_starting_from_school = "00 16 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
 
     let channel = Channel::from_static(SERVER_ADDR)
         .timeout(Duration::from_secs(2))
@@ -61,7 +60,7 @@ async fn actual_main() -> GeneralResult {
     .await?;
 
     let job = move || async move {
-        use crate::server::{cache::WaypointCollection, data_types::RouteDataRequest};
+        use crate::server::{RouteDataRequest, WaypointCollection};
 
         let places = Box::new(WaypointCollection::new());
 
