@@ -46,7 +46,6 @@ mod receiver {
             Self { rx, peeked: None }
         }
 
-        #[allow(dead_code)]
         pub fn peek(&mut self) -> Result<&T, &mpsc::TryRecvError> {
             if self.peeked.is_some() {
                 self.peeked.as_ref().unwrap().as_ref()

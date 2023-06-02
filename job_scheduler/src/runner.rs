@@ -1,10 +1,8 @@
 use self::utils::Inner;
 use crate::JobId;
 use futures::future::BoxFuture;
-use fxhash::FxHasher32;
 use std::{
-    collections::{hash_map, HashMap, VecDeque},
-    hash::BuildHasherDefault,
+    collections::VecDeque,
     sync::{
         mpsc::{Receiver, TryRecvError},
         Arc, Condvar, Mutex,
@@ -24,6 +22,7 @@ pub fn runner(
         .build()
         .unwrap();
 
+    let mut job_receiver = crate::receiver::PeekableReciever::from_receiver(job_receiver);
     let (sender, receiver) = std::sync::mpsc::channel::<JobId>();
     let mut tokio_receiver = crate::receiver::PeekableReciever::from_receiver(receiver);
     log::info!(target: "runner::runner", "Started.");
@@ -32,11 +31,9 @@ pub fn runner(
         let waiting_on_jobs;
         if let Ok(id) = tokio_receiver.try_recv() {
             if let Ok(mut handles) = running_jobs_report.lock() {
-                if let hash_map::Entry::Occupied(mut queue) = handles.inner.entry(id) {
-                    if let Some(handle) = queue.get_mut().pop_front() {
+                if let Some(queue) = handles.inner.get_mut(id as usize) {
+                    if let Some(handle) = queue.pop_front() {
                         rt.block_on(handle_result(id, handle));
-                    } else {
-                        queue.remove_entry();
                     }
                 }
             }
@@ -61,11 +58,16 @@ pub fn runner(
                     result
                 });
                 if let Ok(mut handles) = running_jobs_report.lock() {
-                    handles
-                        .inner
-                        .entry(id)
-                        .or_insert_with(VecDeque::new)
-                        .push_back(handle);
+                    if let Some(queue) = handles.inner.get_mut(id as usize) {
+                        queue.push_back(handle);
+                    } else {
+                        handles.inner.resize_with(id as usize + 1, VecDeque::new);
+                        handles
+                            .inner
+                            .get_mut(id as usize)
+                            .unwrap()
+                            .push_back(handle);
+                    }
                 } else {
                     log::error!(target: "runner::runner", "Couldn't add running job to report. Might be a runaway.");
                 }
@@ -82,7 +84,7 @@ pub fn runner(
                 // Will this work??
                 // Update: Maybe not???
                 // Update: Going back to allowing sleeping, but only sleeping, no housekeeping.
-                if !waiting_on_jobs {
+                if !waiting_on_jobs && tokio_receiver.peek().is_err() && job_receiver.peek().is_err() {
                     log::debug!("No new jobs and no finished jobs. Going to sleep.");
                     drop(
                         runner_go_sleep
@@ -141,18 +143,11 @@ pub fn runner(
 //     });
 // }
 
-fn shutdown(
-    rt: &tokio::runtime::Runtime,
-    handles: &mut HashMap<
-        JobId,
-        VecDeque<JoinHandle<crate::Result>>,
-        BuildHasherDefault<FxHasher32>,
-    >,
-) {
+fn shutdown(rt: &tokio::runtime::Runtime, handles: &mut Vec<VecDeque<JoinHandle<crate::Result>>>) {
     rt.block_on(async {
         tokio::select! {
             _ = async {
-                for (id, mut task) in handles.drain() {
+                for (id, mut task) in (0u32..).zip(handles.drain(..)) {
                     for handle in task.drain(..) {
                         handle_result(id, handle).await;
                     }
@@ -184,36 +179,39 @@ pub struct RunningJobs {
 
 impl RunningJobs {
     pub fn contains(&self, id: &JobId) -> bool {
-        self.inner.contains_key(id)
+        if let Some(queue) = self.inner.get(*id as usize) {
+            !queue.is_empty()
+        } else {
+            false
+        }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
         RunningJobs {
             inner: utils::Inner {
-                map: HashMap::with_capacity_and_hasher(capacity, BuildHasherDefault::default()),
+                map: {
+                    let mut vec = Vec::with_capacity(capacity);
+                    vec.fill_with(VecDeque::new);
+                    vec
+                },
             },
         }
     }
 }
 
 mod utils {
-    use crate::JobId;
-    use fxhash::FxHasher32;
     use std::{
-        collections::{HashMap, VecDeque},
-        hash::BuildHasherDefault,
+        collections::VecDeque,
         ops::{Deref, DerefMut},
     };
     use tokio::task::JoinHandle;
 
     pub struct Inner {
-        pub map:
-            HashMap<JobId, VecDeque<JoinHandle<crate::Result>>, BuildHasherDefault<FxHasher32>>,
+        pub map: Vec<VecDeque<JoinHandle<crate::Result>>>,
     }
 
     impl Deref for Inner {
-        type Target =
-            HashMap<JobId, VecDeque<JoinHandle<crate::Result>>, BuildHasherDefault<FxHasher32>>;
+        type Target = Vec<VecDeque<JoinHandle<crate::Result>>>;
 
         fn deref(&self) -> &Self::Target {
             &self.map
