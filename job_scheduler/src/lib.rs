@@ -10,17 +10,18 @@ pub type Result =
     core::result::Result<(), Box<dyn std::error::Error + core::marker::Send + core::marker::Sync>>;
 pub type JobId = u32;
 
+pub enum Limit {
+    None,
+    NumTimes(usize),
+    EndDate(NaiveDateTime),
+}
+
 /// Adapted from Ibraheem Ahmed's solution on https://stackoverflow.com, Feb 5, 2021.
 /// An implementation to store async functions as trait objects in structs.
 pub trait AsyncFn {
     fn call(&self) -> BoxFuture<'static, Result>;
 }
 
-pub enum Limit {
-    None,
-    NumTimes(usize),
-    EndDate(NaiveDateTime),
-}
 
 impl<T, F> AsyncFn for T
 where

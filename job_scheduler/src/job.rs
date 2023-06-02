@@ -3,10 +3,11 @@ use crate::{runner::RunningJobs, AsyncFn, JobId, Limit};
 use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule;
 use futures::future::BoxFuture;
+use fxhash::FxHasher32;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex}, hash::BuildHasherDefault,
 };
 mod job_internal {
     use crate::{AsyncFn, JobId, Limit};
@@ -157,6 +158,75 @@ mod job_internal {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::Job;
+        use crate::Limit;
+        use chrono::Utc;
+
+        #[test]
+        fn id_matches_what_was_given() {
+            let id = rand::random();
+
+            let job = Job::with_limit(
+                id,
+                || async { Ok(()) },
+                "00 * * * * *".parse().unwrap(),
+                Utc,
+                Limit::NumTimes(0),
+            );
+            assert_eq!(id, job.id());
+        }
+
+        #[test]
+        fn job_without_command_should_be_less_than_job_with_command() {
+            let mut job1 = Job::with_limit(
+                1,
+                || async { Ok(()) },
+                "00 * * * * *".parse().unwrap(),
+                Utc,
+                Limit::NumTimes(0),
+            );
+
+            let job2 = Job::with_limit(
+                2,
+                || async { Ok(()) },
+                "00 * * * * *".parse().unwrap(),
+                Utc,
+                Limit::NumTimes(0),
+            );
+
+            job1.advance_schedule();
+
+            assert!(job1 < job2);
+        }
+
+        #[test]
+        fn job_with_sooner_exec_time_should_be_less_than_other_job() {
+            let mut sooner_job = Job::with_limit(
+                1,
+                || async { Ok(()) },
+                "00 * * * * *".parse().unwrap(),
+                Utc,
+                Limit::NumTimes(3),
+            );
+
+            let mut later_job = Job::with_limit(
+                2,
+                || async { Ok(()) },
+                "00 * * * * *".parse().unwrap(),
+                Utc,
+                Limit::NumTimes(3),
+            );
+
+            sooner_job.advance_schedule();
+            later_job.advance_schedule();
+            later_job.advance_schedule();
+
+            assert!(sooner_job < later_job);
+        }
+    }
 }
 
 pub enum DescheduleError {
@@ -189,8 +259,8 @@ where
     highest_id: Option<JobId>,
     available_ids: BinaryHeap<Reverse<JobId>>,
     active_jobs: BinaryHeap<Reverse<Job<T>>>,
-    scheduled_for_deletion: HashMap<JobId, bool>,
-    running_jobs: Arc<RwLock<RunningJobs>>,
+    scheduled_for_deletion: HashMap<JobId, bool, BuildHasherDefault<FxHasher32>>,
+    running_jobs: Arc<Mutex<RunningJobs>>,
 }
 
 impl<T> JobBoard<T>
@@ -223,8 +293,8 @@ where
             },
             available_ids: Self::create_min_heap_with_size(capacity),
             active_jobs: BinaryHeap::with_capacity(capacity as usize),
-            scheduled_for_deletion: HashMap::new(),
-            running_jobs: Arc::new(RwLock::new(RunningJobs::new())),
+            scheduled_for_deletion: HashMap::with_hasher(BuildHasherDefault::default()),
+            running_jobs: Arc::new(Mutex::new(RunningJobs::with_capacity((capacity / 2) as usize))),
         }
     }
 
@@ -238,7 +308,7 @@ where
     where
         C: AsyncFn + Send + 'static,
     {
-        if let Ok(running_jobs) = self.running_jobs.read() {
+        if let Ok(running_jobs) = self.running_jobs.lock() {
             self.scheduled_for_deletion.retain(|id, was_removed| {
                 if *was_removed && !running_jobs.contains(id) {
                     self.available_ids.push(Reverse(*id));
@@ -286,10 +356,10 @@ where
     }
 
     /// Attempts to run the next available `Job`. On success,
-    /// returns a tuple containing: 1. The `JobId` of the job that was 
-    /// just run, and 2. The `BoxFuture` of the job itself, which should 
+    /// returns a tuple containing: 1. The `JobId` of the job that was
+    /// just run, and 2. The `BoxFuture` of the job itself, which should
     /// be passed to an async runtime to be polled.
-    /// 
+    ///
     /// If the next job can't be run for some reason, the function
     /// returns a `JobError` containing the reason for failure,
     /// but also mutates the internal data structure so that future calls
@@ -339,7 +409,7 @@ where
         }
     }
 
-    pub fn currently_running(&self) -> Arc<RwLock<RunningJobs>> {
+    pub fn currently_running(&self) -> Arc<Mutex<RunningJobs>> {
         self.running_jobs.clone()
     }
 

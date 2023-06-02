@@ -27,8 +27,8 @@ fn main() {
             tokio::time::sleep(Duration::from_secs(5)).await;
             println!("Inside the second async job! (Pretend I'm collecting route data!)");
             tokio::time::sleep(Duration::from_secs(3)).await;
-            println!("Pretend I panicked lmao");
-            panic!();
+
+            Ok(())
         },
         "45 * * * * *".parse().unwrap(),
         job_scheduler::Limit::NumTimes(2),

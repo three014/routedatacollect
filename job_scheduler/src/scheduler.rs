@@ -16,8 +16,14 @@ use std::{
 /// and the date-intervals are interpreted with
 /// whatever timezone that was used to create the
 /// scheduler.
+/// 
+/// A `Job` is an `impl FnOnce + Clone + Send + 'static` function pointer or closure
+/// that returns an `impl Future + Send + 'static` with the return type of
+/// `Result<(), Box<dyn Error + Send + Sync>>`. This means that a job
+/// can be used to mutate a shared state, so long as all items in the job
+/// implement `Clone` and `Send`.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```
 /// use job_scheduler::{Limit, Scheduler};
@@ -38,13 +44,7 @@ use std::{
 /// s.stop();
 /// ```
 ///
-/// A `Job` is an `impl FnOnce + Clone + Send + 'static` function pointer or closure
-/// that returns an `impl Future + Send + 'static` with the return type of
-/// `Result<(), Box<dyn Error + Send + Sync>>`. This means that a job
-/// can be used to mutate a shared state, so long as all items in the job
-/// implement `Clone` and `Send`.
-///
-/// # Example using Shared-State
+/// Using Shared-State:
 ///
 /// ```
 /// use job_scheduler::{Limit, Scheduler};
@@ -86,7 +86,7 @@ use std::{
 /// are very IO-bound, like making tons of RPC calls
 /// to Google Routes API, for example.
 ///
-/// # Error-handling
+/// # Failures
 ///
 /// Jobs that panic do not stop the scheduler. Instead,
 /// they are collected immediately and a `WARN` log
@@ -244,7 +244,7 @@ where
                                 .0,
                         );
                         // Wait a little bit after being woken up so main can set `running` if needed.
-                        thread::sleep(Duration::from_millis(Self::PADDING));
+                        //thread::sleep(Duration::from_millis(Self::PADDING));
                     }
                     ClockState::Run(job) => {
                         log::info!(target: "scheduler::process_manager_thread", "Running job (id={})!", job.0);
@@ -252,7 +252,7 @@ where
                             log::error!(target: "scheduler::process_manager_thread", "{e}. Attempting to stop process manager.");
                             *running.0.lock().unwrap() = false; // Stop loop
                         } else {
-                            sleep.1.notify_one();
+                            sleep.1.notify_all();
                         }
                     }
                     ClockState::Pass => (),
@@ -286,8 +286,8 @@ where
             return;
         }
         log::info!(target: "scheduler::Scheduler::stop", "Stopping service, waiting for all processes to finish.");
-        self.service_running.1.notify_one();
         *self.service_running.0.lock().unwrap() = false;
+        self.service_running.1.notify_one();
         if let Some(handle) = self.clock.take() {
             if let Err(e) = handle.join() {
                 log::error!(target: "scheduler::Scheduler::stop", "Unable to join process manager thread during shutdown: {:?}", e);
