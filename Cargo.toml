@@ -4,3 +4,7 @@ members = [
     "routedatacollect",
     "job_scheduler",
 ]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

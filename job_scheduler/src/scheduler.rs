@@ -16,7 +16,7 @@ use std::{
 /// and the date-intervals are interpreted with
 /// whatever timezone that was used to create the
 /// scheduler.
-/// 
+///
 /// A `Job` is an `impl FnOnce + Clone + Send + 'static` function pointer or closure
 /// that returns an `impl Future + Send + 'static` with the return type of
 /// `Result<(), Box<dyn Error + Send + Sync>>`. This means that a job
@@ -296,7 +296,7 @@ where
         log::info!(target: "scheduler::Scheduler::stop", "Stopped.");
     }
 
-    /// Stops and starts the scheduling service, following the rules of 
+    /// Stops and starts the scheduling service, following the rules of
     /// `stop` and `start`, in that order.
     pub fn restart(&mut self) {
         log::info!(target: "schedule::Scheduler::restart", "Restarting service.");
@@ -310,16 +310,16 @@ where
     }
 
     /// Adds a new job to the scheduler. Refer to [`Scheduler`] for more
-    /// information on what a `Job` function looks like. 
-    /// 
+    /// information on what a `Job` function looks like.
+    ///
     /// Along with the function, the user must also supply a `cron::Schedule`,
-    /// which can be parsed from a string using the `parse` method, and 
+    /// which can be parsed from a string using the `parse` method, and
     /// a `job_scheduler::Limit` if the user desires to automatically stop
     /// scheduling this job at some point later-on.
-    /// 
+    ///
     /// `add_job` cannot panic nor fail, but in the case that the service had
     /// crashed, the scheduler will still add the job to the queue.
-    /// 
+    ///
     /// Returns a `JobId` which is just a `u32` for the job just submitted.
     /// This can be used later to remove the job manually if desired.
     pub fn add_job<C>(

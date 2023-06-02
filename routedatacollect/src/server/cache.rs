@@ -129,3 +129,9 @@ impl WaypointCollection {
         &self.fm78_heb
     }
 }
+
+impl Default for WaypointCollection {
+    fn default() -> Self {
+        Self::new()
+    }
+}

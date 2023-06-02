@@ -7,7 +7,8 @@ use fxhash::FxHasher32;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
-    sync::{Arc, Mutex}, hash::BuildHasherDefault,
+    hash::BuildHasherDefault,
+    sync::{Arc, Mutex},
 };
 mod job_internal {
     use crate::{AsyncFn, JobId, Limit};
@@ -294,7 +295,9 @@ where
             available_ids: Self::create_min_heap_with_size(capacity),
             active_jobs: BinaryHeap::with_capacity(capacity as usize),
             scheduled_for_deletion: HashMap::with_hasher(BuildHasherDefault::default()),
-            running_jobs: Arc::new(Mutex::new(RunningJobs::with_capacity((capacity / 2) as usize))),
+            running_jobs: Arc::new(Mutex::new(RunningJobs::with_capacity(
+                (capacity / 2) as usize,
+            ))),
         }
     }
 

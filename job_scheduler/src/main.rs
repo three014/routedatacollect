@@ -1,5 +1,4 @@
 use chrono::Local;
-use cron::Schedule;
 use job_scheduler::Scheduler;
 use std::{thread, time::Duration};
 
@@ -12,7 +11,7 @@ fn main() {
     let _id = s.add_job(
         || async {
             println!("Hello World from async job!");
-            let _ = "* * *2das".parse::<Schedule>()?;
+            let _: i32 = "asd".parse()?;
             Ok(())
         },
         schedule,
