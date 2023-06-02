@@ -15,11 +15,12 @@ use tokio::task::JoinHandle;
 
 pub fn runner(
     job_receiver: Receiver<(JobId, BoxFuture<'static, crate::Result>)>,
-    _runner_go_sleep: Arc<(Mutex<()>, Condvar)>,
+    runner_go_sleep: Arc<(Mutex<()>, Condvar)>,
     running_jobs_report: Arc<Mutex<RunningJobs>>,
 ) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
+        .enable_all()
         .build()
         .unwrap();
 
@@ -28,7 +29,7 @@ pub fn runner(
     log::info!(target: "runner::runner", "Started.");
 
     loop {
-        //let waiting_on_jobs;
+        let waiting_on_jobs;
         if let Ok(id) = tokio_receiver.try_recv() {
             if let Ok(mut handles) = running_jobs_report.lock() {
                 if let hash_map::Entry::Occupied(mut queue) = handles.inner.entry(id) {
@@ -39,23 +40,23 @@ pub fn runner(
                     }
                 }
             }
-            //waiting_on_jobs = tokio_receiver.peek().is_some();
+            waiting_on_jobs = tokio_receiver.peek().is_ok();
         } else {
-            //waiting_on_jobs = false;
+            waiting_on_jobs = false;
         }
 
         // Check if there are any jobs to process, and/or if the runner should sleep.
         match job_receiver.try_recv() {
             Ok((id, future)) => {
                 let alert_runner = sender.clone();
-                //let runner_wake_up = runner_go_sleep.clone();
+                let runner_wake_up = runner_go_sleep.clone();
                 let handle = rt.spawn(async move {
                     // Run the job.
                     let result = future.await;
                     // Tell the runner we're finished.
                     alert_runner.send(id).expect("Receiver pipe should be open, since it's on the runner thread. Runner thread shouldn't crash (easily).");
                     // Wake up the runner just in case.
-                //runner_wake_up.1.notify_all();
+                    runner_wake_up.1.notify_all();
                     // Return the result.
                     result
                 });
@@ -80,6 +81,20 @@ pub fn runner(
                 //
                 // Will this work??
                 // Update: Maybe not???
+                // Update: Going back to allowing sleeping, but only sleeping, no housekeeping.
+                if !waiting_on_jobs {
+                    log::debug!("No new jobs and no finished jobs. Going to sleep.");
+                    drop(
+                        runner_go_sleep
+                            .1
+                            .wait_timeout(
+                                runner_go_sleep.0.lock().unwrap(),
+                                Duration::from_secs(600),
+                            )
+                            .unwrap()
+                            .0,
+                    )
+                }
                 /*
                 let mut lock = running_jobs_report.try_lock().unwrap();
                 if lock.inner.values().all(|handle| handle.is_finished()) && !waiting_on_jobs {
