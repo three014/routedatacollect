@@ -85,7 +85,7 @@ pub fn runner(
                 // Update: Maybe not???
                 // Update: Going back to allowing sleeping, but only sleeping, no housekeeping.
                 if !waiting_on_jobs {
-                    log::debug!("No new jobs and no finished jobs. Going to sleep.");
+                    log::trace!("No new jobs and no finished jobs. Going to sleep.");
                     drop(
                         runner_go_sleep
                             .1

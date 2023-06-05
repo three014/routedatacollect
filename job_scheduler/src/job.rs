@@ -3,11 +3,9 @@ use crate::{runner::RunningJobs, AsyncFn, JobId, Limit};
 use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule;
 use futures::future::BoxFuture;
-use fxhash::FxHasher32;
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
-    hash::BuildHasherDefault,
+    collections::BinaryHeap,
     sync::{Arc, Mutex},
 };
 mod job_internal {
@@ -260,7 +258,7 @@ where
     highest_id: Option<JobId>,
     available_ids: BinaryHeap<Reverse<JobId>>,
     active_jobs: BinaryHeap<Reverse<Job<T>>>,
-    scheduled_for_deletion: HashMap<JobId, bool, BuildHasherDefault<FxHasher32>>,
+    scheduled_for_deletion: Vec<Option<bool>>,
     running_jobs: Arc<Mutex<RunningJobs>>,
 }
 
@@ -294,7 +292,7 @@ where
             },
             available_ids: Self::create_min_heap_with_size(capacity),
             active_jobs: BinaryHeap::with_capacity(capacity as usize),
-            scheduled_for_deletion: HashMap::with_hasher(BuildHasherDefault::default()),
+            scheduled_for_deletion: vec![None; capacity as usize],
             running_jobs: Arc::new(Mutex::new(RunningJobs::with_capacity(
                 (capacity / 2) as usize,
             ))),
@@ -312,14 +310,12 @@ where
         C: AsyncFn + Send + 'static,
     {
         if let Ok(running_jobs) = self.running_jobs.lock() {
-            self.scheduled_for_deletion.retain(|id, was_removed| {
-                if *was_removed && !running_jobs.contains(id) {
-                    self.available_ids.push(Reverse(*id));
-                    false
-                } else {
-                    true
+            for (id, was_removed) in (0u32..).zip(self.scheduled_for_deletion.iter_mut()) {
+                if was_removed.unwrap_or(false) && !running_jobs.contains(&id) {
+                    *was_removed = None;
+                    self.available_ids.push(Reverse(id));
                 }
-            });
+            }
         }
 
         let job = Job::with_limit(
@@ -373,12 +369,18 @@ where
                 let id = job.0.id();
 
                 // Jobs that are scheduled for deletion won't make it to the runner
-                if let Some(was_deleted) = self.scheduled_for_deletion.get_mut(&id) {
+                if let Some(was_deleted) = self
+                    .scheduled_for_deletion
+                    .get_mut(id as usize)
+                    .and_then(|maybe| maybe.as_mut())
+                {
                     *was_deleted = true;
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job was scheduled for deletion, returning error.");
                     Err(JobError::ScheduledForDeletion)
                 } else if job.0.next_exec_time().is_none() {
-                    self.scheduled_for_deletion.insert(id, true);
+                    let new_len = usize::max(id as usize + 1, self.scheduled_for_deletion.len());
+                    self.scheduled_for_deletion.resize(new_len, None);
+                    *self.scheduled_for_deletion.get_mut(id as usize).unwrap() = Some(true);
                     log::trace!(target: "scheduler::job_stats::JobSchedule::try_run_next", "Job had no more datetimes, is finished, returning error.");
                     Err(JobError::JobFinished)
                 } else {
@@ -402,13 +404,17 @@ where
     /// for any reason. On success, the next time the internal clock chooses
     /// this job to run, it will instead delete the job.
     pub fn deschedule(&mut self, job_id: JobId) -> Result<(), DescheduleError> {
-        if let std::collections::hash_map::Entry::Vacant(e) =
-            self.scheduled_for_deletion.entry(job_id)
-        {
-            e.insert(false);
-            Ok(())
-        } else {
+        let new_len = usize::max(job_id as usize + 1, self.scheduled_for_deletion.len());
+        self.scheduled_for_deletion.resize(new_len, None);
+        let already_scheduled = self
+            .scheduled_for_deletion
+            .get_mut(job_id as usize)
+            .unwrap();
+        if already_scheduled.is_some() {
             Err(DescheduleError::AlreadyScheduled)
+        } else {
+            *already_scheduled = Some(false);
+            Ok(())
         }
     }
 

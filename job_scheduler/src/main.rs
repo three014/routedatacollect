@@ -4,7 +4,7 @@ use std::{thread, time::Duration};
 
 fn main() {
     env_logger::init();
-    let mut s = Scheduler::<Local>::with_timezone(Local);
+    let mut s = Scheduler::with_timezone(Local);
 
     let schedule = "30 * * * * *".parse().unwrap();
 
