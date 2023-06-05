@@ -84,18 +84,15 @@ pub fn runner(
                 // Will this work??
                 // Update: Maybe not???
                 // Update: Going back to allowing sleeping, but only sleeping, no housekeeping.
-                if !waiting_on_jobs && tokio_receiver.peek().is_err() && job_receiver.peek().is_err() {
+                if !waiting_on_jobs {
                     log::debug!("No new jobs and no finished jobs. Going to sleep.");
                     drop(
                         runner_go_sleep
                             .1
-                            .wait_timeout(
-                                runner_go_sleep.0.lock().unwrap(),
-                                Duration::from_secs(600),
-                            )
+                            .wait_timeout(runner_go_sleep.0.lock().unwrap(), Duration::from_secs(5))
                             .unwrap()
                             .0,
-                    )
+                    );
                 }
                 /*
                 let mut lock = running_jobs_report.try_lock().unwrap();

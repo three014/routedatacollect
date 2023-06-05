@@ -181,92 +181,97 @@ where
         log::info!(target: "scheduler::Scheduler::start", "Starting service.");
 
         self.clock = Some(thread::spawn(move || {
-            enum ClockState {
+            enum State {
                 Sleep(Duration),
                 Run((JobId, BoxFuture<'static, crate::Result>)),
                 Pass,
             }
 
-            // Create a new thread, channel, and condition variable.
-            // New thread gets receiving channel, curr thread gets sender channel.
-            // Both threads get a copy of the condition variable so that the
-            // clock can tell the runner to wake up when necessary.
-            let (sender, reciever) = mpsc::channel::<(JobId, BoxFuture<'static, crate::Result>)>();
-            let sleep = Arc::new((Mutex::new(()), Condvar::new()));
-            let sleep_for_runner = sleep.clone();
-            let runner_handle = thread::spawn(move || {
-                runner::runner(reciever, sleep_for_runner, running_jobs_report);
-            });
+            thread::scope(move |s| {
+                // Create a new thread, channel, and condition variable.
+                // New thread gets receiving channel, curr thread gets sender channel.
+                // Both threads get a copy of the condition variable so that the
+                // clock can tell the runner to wake up when necessary.
+                let (sender, reciever) =
+                    mpsc::channel::<(JobId, BoxFuture<'static, crate::Result>)>();
+                let sleep = Arc::new((Mutex::new(()), Condvar::new()));
+                let sleep_for_runner = sleep.clone();
 
-            while {
-                match running.0.lock() {
-                    Ok(guard) => *guard,
-                    Err(_) => false, // If main thread panicked, stop service.
-                }
-            } {
-                let mut state = ClockState::Pass;
-                let mut jobs = jobs.lock().unwrap();
+                let runner_handle = s.spawn(move || {
+                    runner::runner(reciever, sleep_for_runner, running_jobs_report);
+                });
 
-                if let Some(exec_time) = jobs.peek_next() {
-                    let now = Utc::now();
-                    let then = exec_time.with_timezone(&Utc);
-                    log::debug!("now: {:?}, then: {:?}", &now, &then);
-                    if then > now {
-                        log::debug!(target: "scheduler::process_manager_thread", "Can't run yet, time is in the future: {:?}.", then);
-                        let diff = then - now;
+                while {
+                    match running.0.lock() {
+                        Ok(guard) => *guard,
+                        Err(_) => false, // If main thread panicked, stop service.
+                    }
+                } {
+                    let mut state = State::Pass;
+                    let mut jobs = jobs.lock().unwrap();
 
-                        state = ClockState::Sleep(diff.to_std().unwrap_or(Duration::from_secs(0)));
+                    if let Some(exec_time) = jobs.peek_next() {
+                        let now = Utc::now();
+                        let then = exec_time.with_timezone(&Utc);
+                        log::debug!("now: {:?}, then: {:?}", &now, &then);
+                        if then > now {
+                            log::debug!(target: "scheduler::process_manager_thread", "Can't run yet, time is in the future: {:?}.", then);
+                            let diff = then - now;
+
+                            state =
+                                State::Sleep(diff.to_std().unwrap_or(Duration::from_secs(0)));
+                        } else {
+                            log::debug!(target: "scheduler::process_manager_thread", "Attempting to exec job.");
+                            if let Ok(job) = jobs.try_run_next() {
+                                state = State::Run(job);
+                            } else {
+                                log::debug!(target: "scheduler::process_manager_thread", "Couldn't run job.");
+                            }
+                        }
                     } else {
-                        log::debug!(target: "scheduler::process_manager_thread", "Attempting to exec job.");
-                        if let Ok(job) = jobs.try_run_next() {
-                            state = ClockState::Run(job);
-                        } else {
-                            log::debug!(target: "scheduler::process_manager_thread", "Couldn't run job.");
+                        state = State::Sleep(Duration::from_secs(Self::SECONDS_IN_AN_HOUR));
+                    }
+
+                    drop(jobs);
+
+                    match state {
+                        State::Sleep(duration) => {
+                            log::debug!(target: "scheduler::process_manager_thread", "About to sleep for {:?}.", &duration);
+                            drop(
+                                running
+                                    .1
+                                    .wait_timeout(
+                                        running.0.lock().unwrap(),
+                                        duration + Duration::from_millis(Self::PADDING),
+                                    )
+                                    .unwrap()
+                                    .0,
+                            );
+                            // Wait a little bit after being woken up so main can set `running` if needed.
+                            //thread::sleep(Duration::from_millis(Self::PADDING));
                         }
-                    }
-                } else {
-                    state = ClockState::Sleep(Duration::from_secs(Self::SECONDS_IN_AN_HOUR));
-                }
-
-                drop(jobs);
-
-                match state {
-                    ClockState::Sleep(duration) => {
-                        log::debug!(target: "scheduler::process_manager_thread", "About to sleep for {:?}.", &duration);
-                        drop(
-                            running
-                                .1
-                                .wait_timeout(
-                                    running.0.lock().unwrap(),
-                                    duration + Duration::from_millis(Self::PADDING),
-                                )
-                                .unwrap()
-                                .0,
-                        );
-                        // Wait a little bit after being woken up so main can set `running` if needed.
-                        //thread::sleep(Duration::from_millis(Self::PADDING));
-                    }
-                    ClockState::Run(job) => {
-                        log::info!(target: "scheduler::process_manager_thread", "Running job (id={})!", job.0);
-                        if let Err(e) = sender.send(job) {
-                            log::error!(target: "scheduler::process_manager_thread", "{e}. Attempting to stop process manager.");
-                            *running.0.lock().unwrap() = false; // Stop loop
-                        } else {
-                            sleep.1.notify_all();
+                        State::Run(job) => {
+                            log::info!(target: "scheduler::process_manager_thread", "Running job (id={})!", job.0);
+                            if let Err(e) = sender.send(job) {
+                                log::error!(target: "scheduler::process_manager_thread", "{e}. Attempting to stop process manager.");
+                                *running.0.lock().unwrap() = false; // Stop loop
+                            } else {
+                                sleep.1.notify_all();
+                            }
                         }
+                        State::Pass => (),
                     }
-                    ClockState::Pass => (),
                 }
-            }
-            log::trace!(target: "scheduler::process_manager_thread", "Ending process manager thread.");
+                log::trace!(target: "scheduler::process_manager_thread", "Ending process manager thread.");
 
-            // Cleanup | TODO: Error handling please
-            drop(sender);
-            sleep.1.notify_one();
-            if let Err(e) = runner_handle.join() {
-                log::error!(target: "scheduler::process_manager_thread", "{:?}", e);
-            }
-            log::trace!(target: "scheduler::process_manager_thread", "Leaving closure.");
+                // Cleanup | TODO: Error handling please
+                drop(sender);
+                sleep.1.notify_one();
+                if let Err(e) = runner_handle.join() {
+                    log::error!(target: "scheduler::process_manager_thread", "{:?}", e);
+                }
+                log::trace!(target: "scheduler::process_manager_thread", "Leaving closure.");
+            });
         }));
     }
 

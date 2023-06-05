@@ -43,7 +43,8 @@ async fn start() -> GeneralResult {
     let db_uri = db_uri().await?;
 
     let mut scheduler = Scheduler::with_timezone(chrono_tz::America::Chicago);
-    let every_day_starting_from_school = "00 16 13,14,15,16,17 * * *".parse::<cron::Schedule>()?;
+    let every_day_starting_from_school =
+        "00 16 13,14,15,16,17,18 * * Mon,Tue,Wed,Thu,Fri".parse::<cron::Schedule>()?;
 
     let channel = Channel::from_static(SERVER_ADDR)
         .timeout(Duration::from_secs(2))
@@ -88,6 +89,7 @@ async fn start() -> GeneralResult {
 
         let response = svc.compute_routes(req).await?;
         svc.save_to_db(response).await?;
+        log::info!("Saved \"utsa to heb\" to db!");
         tokio::time::sleep(chrono::Duration::minutes(26).to_std()?).await;
 
         // Create request from Martin Opposite Leona to Heb
@@ -112,6 +114,7 @@ async fn start() -> GeneralResult {
 
         let response = svc.compute_routes(req).await?;
         svc.save_to_db(response).await?;
+        log::info!("Saved \"martin opposite leona to heb\" to db!");
         tokio::time::sleep(chrono::Duration::minutes(43).to_std()?).await;
 
         // Create request from Randolph Park and Ride to Heb
@@ -131,6 +134,7 @@ async fn start() -> GeneralResult {
 
         let response = svc.compute_routes(req).await?;
         svc.save_to_db(response).await?;
+        log::info!("Saved \"randolph park and ride to heb\" to db!");
         tokio::time::sleep(chrono::Duration::minutes(14).to_std()?).await;
 
         // Create request from Train Tracks at Rittiman to Heb
@@ -144,6 +148,7 @@ async fn start() -> GeneralResult {
 
         let response = svc.compute_routes(req).await?;
         svc.save_to_db(response).await?;
+        log::info!("Saved \"railroad tracks at rittiman to heb\" to db!");
 
         Ok(())
     };
