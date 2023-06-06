@@ -297,6 +297,13 @@ dependencies = [
 
 [[package]]
 name = "cron"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
+name = "cron"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ff76b51e4c068c52bfd2866e1567bee7c567ae8f24ada09fd4307019e25eab7"
@@ -879,7 +886,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "chrono-tz",
- "cron",
+ "cron 0.12.0",
  "env_logger",
  "futures",
  "log",
@@ -1428,7 +1435,7 @@ dependencies = [
  "bson",
  "chrono",
  "chrono-tz",
- "cron",
+ "cron 0.12.0",
  "env_logger",
  "futures",
  "http-body",

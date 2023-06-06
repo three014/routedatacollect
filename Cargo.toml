@@ -3,6 +3,7 @@
 members = [
     "routedatacollect",
     "job_scheduler",
+    "cron"
 ]
 
 [profile.release-with-debug]
