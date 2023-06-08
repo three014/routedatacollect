@@ -218,8 +218,7 @@ where
                             log::debug!(target: "scheduler::process_manager_thread", "Can't run yet, time is in the future: {:?}.", then);
                             let diff = then - now;
 
-                            state =
-                                State::Sleep(diff.to_std().unwrap_or(Duration::from_secs(0)));
+                            state = State::Sleep(diff.to_std().unwrap_or(Duration::from_secs(0)));
                         } else {
                             log::debug!(target: "scheduler::process_manager_thread", "Attempting to exec job.");
                             if let Ok(job) = jobs.try_run_next() {
