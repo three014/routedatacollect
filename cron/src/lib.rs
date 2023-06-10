@@ -11,8 +11,8 @@ mod schedule {
     use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
     use std::str::FromStr;
 
-    mod iterator;
     mod fields;
+    mod iterator;
 
     type Field = CopyRing<u32>;
 
@@ -22,7 +22,6 @@ mod schedule {
         years_after_curr: u8,
         days_in_curr_month: u8,
     }
-
 
     impl Schedule {
         pub fn iter_with_timezone<Tz: TimeZone + 'static>(
@@ -313,11 +312,7 @@ fn days_in_a_month(month: u8, year: u32) -> u8 {
 fn is_leap_year(year: u32) -> bool {
     if year % 4 == 0 {
         if year % 100 == 0 {
-            if year % 400 == 0 {
-                true
-            } else {
-                false
-            }
+            year % 400 == 0
         } else {
             true
         }

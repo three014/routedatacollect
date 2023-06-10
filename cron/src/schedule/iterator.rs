@@ -1,3 +1,5 @@
+use std::fmt::{Display, Debug};
+
 use super::Schedule;
 use chrono::{DateTime, TimeZone};
 
@@ -81,7 +83,7 @@ where
     /// number of values in total. Dropping this iterator
     /// before it finishes will leave the `CopyRing` at
     /// wherever it was before the next iteration.
-    pub fn one_cycle(&mut self) -> impl ExactSizeIterator<Item = T> + '_ {
+    pub fn one_cycle(&mut self) -> CycleIterMut<'_, T> {
         let number_iters_left = self.collection.len();
         self.take_mut(number_iters_left)
     }
@@ -100,21 +102,16 @@ where
     /// 
     /// True if wrapping occurred, false otherwise.
     pub fn checked_next(&mut self) -> Option<(T, bool)> {
-        let prev_idx = self.index;
+        let prev_index = self.index;
         let next = self.next()?;
-        if prev_idx > self.index {
-            Some((next, true))
-        } else {
-            Some((next, false))
-        }
+        Some((next, prev_index == 0))
     }
 
     /// Rotates the ring to the left, yielding each value until the
     /// ring reaches the start again.
-    pub fn until_start(&mut self) -> impl ExactSizeIterator<Item = T> + '_ {
+    pub fn until_start(&mut self) -> CycleIterMut<'_, T> {
         let number_iters_left = self.period() - self.index;
-        let corrected_num = number_iters_left % self.period();
-        self.take_mut(corrected_num)
+        self.take_mut(number_iters_left)
     }
 
     /// Returns the previous item in the ring.
@@ -123,7 +120,7 @@ where
     /// calling `prev` will yield the same value
     /// as `next` if they are called one-after-another.
     pub fn prev(&mut self) -> Option<T> {
-        if self.collection.len() == 0 {
+        if self.collection.is_empty() {
             return None;
         }
         self.rotate_right(1);
@@ -131,20 +128,22 @@ where
     }
 
     pub fn rotate_left(&mut self, n: usize) {
-        self.index = (self.index + n) % self.period()
+        self.index = (self.index + n) % self.period();
+        //println!("Rotated left - new index: {}", self.index);
     }
 
     pub fn rotate_right(&mut self, n: usize) {
         let len = self.period() as isize;
         let idx = self.index as isize;
         let x = n as isize;
-        self.index = ((-((x - idx) % len) + len) % len) as usize
+        self.index = ((-((x - idx) % len) + len) % len) as usize;
+        //println!("Rotated right - new index: {}", self.index);
     }
 
     /// Returns the same value as `next` without
     /// advancing the ring's index.
     pub fn peek(&self) -> Option<T> {
-        if self.period() == 0 {
+        if self.collection.is_empty() {
             None
         } else {
             Some(self.collection[self.index])
@@ -152,7 +151,7 @@ where
     }
 
     pub fn next(&mut self) -> Option<T> {
-        if self.collection.len() == 0 {
+        if self.collection.is_empty() {
             return None;
         }
         let index = self.index;
@@ -167,7 +166,7 @@ where
     ///
     /// If you'd like to iterate through the ring
     /// without mutating the ring, use `take` instead.
-    pub fn take_mut(&mut self, n: usize) -> impl ExactSizeIterator<Item = T> + '_ {
+    pub fn take_mut(&mut self, n: usize) -> CycleIterMut<'_, T> {
         CycleIterMut { ring: self, n }
     }
 
@@ -179,7 +178,7 @@ where
     }
 }
 
-struct CycleIterMut<'a, T: Copy> {
+pub struct CycleIterMut<'a, T: Copy> {
     ring: &'a mut CopyRing<T>,
     n: usize,
 }
@@ -188,6 +187,27 @@ struct CycleIter<'a, T: Copy> {
     ring_buf: &'a Vec<T>,
     index: usize,
     n: usize,
+}
+
+impl<'a, T: Copy> CycleIterMut<'a, T> {
+    pub fn checked_next(&mut self) -> Option<(T, bool)> {
+        let prev_index = self.ring.index;
+        let next = self.next()?;
+        Some((next, prev_index == 0))
+    }
+
+    pub fn checked(self) -> impl Iterator<Item = (T, bool)> + 'a {
+        struct Checked<'a, T: Copy>(CycleIterMut<'a, T>);
+        impl<'a, T: Copy> Iterator for Checked<'a, T> {
+            type Item = (T, bool);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.0.checked_next()
+            }
+        }
+        impl<'a, T: Copy> ExactSizeIterator for Checked<'a, T> {}
+        Checked(self)
+    }
 }
 
 impl<'a, T: Copy> Iterator for CycleIter<'a, T> {
