@@ -5,13 +5,13 @@ pub enum Error {
     Unknown,
 }
 
-mod schedule {
+pub mod schedule {
     use self::{
         fields::FieldTable,
         iterator::{OwnedScheduleIter, ScheduleIter},
     };
     use crate::Error;
-    use chrono::{DateTime, TimeZone};
+    use chrono::{DateTime, TimeZone, Utc};
     use std::str::FromStr;
 
     mod fields;
@@ -23,25 +23,28 @@ mod schedule {
     }
 
     impl Schedule {
-        pub fn iter_with_timezone<Tz: TimeZone + 'static>(
+        pub fn iter_with_timezone<Tz: TimeZone + Clone + 'static>(
             &mut self,
             tz: Tz,
         ) -> impl Iterator<Item = DateTime<Tz>> + '_ {
-            self.recalibrate(&tz);
-            ScheduleIter::new(self, tz)
+            let first = self.recalibrate(&tz);
+            ScheduleIter::new(self, first, tz)
         }
 
-        fn recalibrate<Tz: TimeZone + 'static>(&mut self, tz: &Tz) {}
+        fn recalibrate<Tz: TimeZone + Clone + 'static>(&mut self, tz: &Tz) -> Option<DateTime<Tz>> {
+            let first = self.fields.after(&Utc::now().with_timezone(tz));
+            first.and_then(|dt| dt.and_local_timezone(tz.clone()).earliest())
+        }
 
         pub fn into_iter_with_timezone<Tz: TimeZone + 'static>(
             mut self,
             tz: Tz,
         ) -> impl Iterator<Item = DateTime<Tz>> {
-            self.recalibrate(&tz);
-            OwnedScheduleIter::new(self, tz)
+            let first = self.recalibrate(&tz);
+            OwnedScheduleIter::new(self, first, tz)
         }
 
-        fn next<Tz: TimeZone + 'static>(&mut self, tz: &Tz) -> DateTime<Tz> {
+        fn next<Tz: TimeZone + 'static>(&mut self, tz: &Tz) -> Option<DateTime<Tz>> {
             todo!()
         }
     }

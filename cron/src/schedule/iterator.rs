@@ -4,27 +4,31 @@ use std::fmt::Debug;
 
 pub struct ScheduleIter<'a, Tz: TimeZone> {
     schedule: &'a mut Schedule,
+    next: Option<DateTime<Tz>>,
     tz: Tz,
 }
 
 pub struct OwnedScheduleIter<Tz: TimeZone> {
     schedule: Schedule,
+    next: Option<DateTime<Tz>>,
     tz: Tz,
 }
 
 impl<'a, Tz: TimeZone> ScheduleIter<'a, Tz> {
-    pub fn new(schedule: &'a mut Schedule, timezone: Tz) -> Self {
+    pub fn new(schedule: &'a mut Schedule, next: Option<DateTime<Tz>>, timezone: Tz) -> Self {
         Self {
             schedule,
+            next,
             tz: timezone,
         }
     }
 }
 
 impl<Tz: TimeZone> OwnedScheduleIter<Tz> {
-    pub fn new(schedule: Schedule, timezone: Tz) -> Self {
+    pub fn new(schedule: Schedule, next: Option<DateTime<Tz>>, timezone: Tz) -> Self {
         Self {
             schedule,
+            next,
             tz: timezone,
         }
     }

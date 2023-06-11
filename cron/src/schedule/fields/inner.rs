@@ -94,9 +94,9 @@ impl Minutes {
         if found {
             self.0.rotate_right(1);
             let final_overflow = secs_overflow && overflow;
-            (self.0.next().unwrap(), final_overflow)
+            (self.0.peek().unwrap(), final_overflow)
         } else {
-            (self.0.next().unwrap(), true)
+            (self.0.peek().unwrap(), true)
         }
     }
 
@@ -105,8 +105,12 @@ impl Minutes {
     /// occurred. For minutes, overflow
     /// occurs when the minutes passes 59
     /// and wraps back to 0.
-    pub fn next(&mut self) -> (u8, bool) {
-        self.0.checked_next().unwrap()
+    pub fn next(&mut self, secs_overflow: bool) -> (u8, bool) {
+        if secs_overflow {
+            self.0.checked_next().unwrap()
+        } else {
+            (self.0.peek().unwrap(), false)
+        }
     }
 }
 
@@ -141,9 +145,9 @@ impl Hours {
         if found {
             self.0.rotate_right(1);
             let final_overflow = mins_overflow && overflow;
-            (self.0.next().unwrap(), final_overflow)
+            (self.0.peek().unwrap(), final_overflow)
         } else {
-            (self.0.next().unwrap(), true)
+            (self.0.peek().unwrap(), true)
         }
     }
 
@@ -152,8 +156,12 @@ impl Hours {
     /// occurred. For hours, overflow
     /// occurs when the hours passes 23
     /// and wraps back to 0.
-    pub fn next(&mut self) -> (u8, bool) {
-        self.0.checked_next().unwrap()
+    pub fn next(&mut self, mins_overflow: bool) -> (u8, bool) {
+        if mins_overflow {
+            self.0.checked_next().unwrap()
+        } else {
+            (self.0.peek().unwrap(), false)
+        }
     }
 }
 
@@ -166,6 +174,7 @@ impl Days {
         month: u8,
         year: u32,
     ) -> (u8, bool) {
+        use std::cmp::Ordering;
         let days_in_curr_month = crate::days_in_a_month(month, year);
         match self {
             Days::Both { month, week } => {
@@ -185,54 +194,42 @@ impl Days {
 
                 match (next_day_week.1, next_day_month.1) {
                     (true, true) | (false, false) => match next_day_month.0.cmp(&next_day_week.0) {
-                        std::cmp::Ordering::Less => {
-                            month.rotate_left(1);
-                            next_day_month
-                        }
-                        std::cmp::Ordering::Equal => {
-                            month.rotate_left(1);
-                            week.rotate_left(1);
-                            next_day_month
-                        }
-                        std::cmp::Ordering::Greater => {
-                            week.rotate_left(1);
-                            next_day_week
-                        }
+                        Ordering::Less => next_day_month,
+                        Ordering::Equal => next_day_month, // Doesn't matter which one to return
+                        Ordering::Greater => next_day_week,
                     },
                     (true, false) => {
                         // The month day was sooner, commit to the month day
-                        month.rotate_left(1);
                         next_day_month
                     }
                     (false, true) => {
                         // The weekday was sooner, commit to the weekday
-                        week.rotate_left(1);
                         next_day_week
                     }
                 }
             }
             Days::Month(month) => {
-                let next = Self::next_day_of_the_month(
+                Self::next_day_of_the_month(
                     month,
                     hours_overflow,
                     day_of_month,
                     days_in_curr_month,
-                );
-                month.rotate_left(1);
-                next
+                )
             }
             Days::Week(week) => {
-                let next = Self::next_day_of_the_week(
+                Self::next_day_of_the_week(
                     week,
                     hours_overflow,
                     day_of_week,
                     day_of_month,
                     days_in_curr_month,
-                );
-                week.rotate_left(1);
-                next
+                )
             }
         }
+    }
+
+    pub fn next(&mut self, hours_overflow: bool) -> (u8, bool) {
+        todo!()
     }
 
     fn next_day_of_the_month(
@@ -326,9 +323,9 @@ impl Months {
         if found {
             self.0.rotate_right(1);
             let final_overflow = day_overflow && overflow;
-            (self.0.next().unwrap(), final_overflow)
+            (self.0.peek().unwrap(), final_overflow)
         } else {
-            (self.0.next().unwrap(), true)
+            (self.0.peek().unwrap(), true)
         }
     }
 }

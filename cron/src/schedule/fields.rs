@@ -147,10 +147,16 @@ impl Builder {
                 Days::Both {
                     ref month,
                     ref week,
-                } => month.last().unwrap() >= 31 || week.last().unwrap() >= 7,
-                Days::Month(ref month) => month.last().unwrap() >= 31,
+                } => {
+                    month.last().unwrap() >= 31
+                        || month.first().unwrap() < 1
+                        || week.last().unwrap() >= 7
+                }
+                Days::Month(ref month) => month.last().unwrap() >= 31 || month.first().unwrap() < 1,
                 Days::Week(ref week) => week.last().unwrap() >= 7,
             }
+            || months.last().unwrap() > 12
+            || months.first().unwrap() < 1
         {
             return Err(Error::OutOfRange);
         }
@@ -199,6 +205,10 @@ impl FieldTable {
 
         NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
             .and_then(|date| date.and_hms_opt(hours as u32, mins as u32, secs as u32))
+    }
+
+    pub fn next(&mut self) -> Option<NaiveDateTime> {
+        todo!()
     }
 
     pub fn builder() -> Builder {
