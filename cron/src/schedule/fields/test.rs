@@ -104,7 +104,10 @@ fn first_after_works_for_mins_overflow() {
 #[test]
 fn first_after_days_both_spec() {
     let mut days = Days::Both {
-        week: CopyRing::from_iter(gen_range_days_of_week()),
+        week: (
+            CopyRing::from_iter(gen_range_days_of_week()),
+            Default::default(),
+        ),
         month: CopyRing::from_iter(gen_range_days_of_month()),
     };
 
@@ -117,6 +120,6 @@ fn first_after_days_both_spec() {
         now.year() as u32,
     );
 
-    //dbg!(days);
-    //println!("{}, {:?}", now, next);
+    dbg!(days);
+    println!("{}, {:?}", now, next);
 }

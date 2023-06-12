@@ -1,26 +1,75 @@
 use crate::schedule::iterator::CopyRing;
 
 #[derive(Clone, Debug)]
-pub struct Seconds(CopyRing<u8>);
+pub(super) struct Seconds(CopyRing<u8>);
 
 #[derive(Clone, Debug)]
-pub struct Minutes(CopyRing<u8>);
+pub(super) struct Minutes(CopyRing<u8>);
 
 #[derive(Clone, Debug)]
-pub struct Hours(CopyRing<u8>);
+pub(super) struct Hours(CopyRing<u8>);
 
 #[derive(Clone, Debug)]
-pub enum Days {
+pub(super) enum Days {
     Both {
         month: CopyRing<u8>,
-        week: CopyRing<u8>,
+        week: (CopyRing<u8>, WeekSummary),
     },
     Month(CopyRing<u8>),
-    Week(CopyRing<u8>),
+    Week((CopyRing<u8>, WeekSummary)),
 }
 
 #[derive(Clone, Debug)]
-pub struct Months(CopyRing<u8>);
+pub(super) struct WeekSummary {
+    last_month_day: u8,
+    last_weekday: u8,
+    last_used: LastUsed,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) enum LastUsed {
+    Week,
+    #[default]
+    Month,
+    Both,
+}
+
+impl Default for WeekSummary {
+    fn default() -> Self {
+        Self {
+            last_weekday: Default::default(),
+            last_month_day: Default::default(),
+            last_used: Default::default(),
+        }
+    }
+}
+
+impl WeekSummary {
+    pub fn set(&mut self, new_summary: WeekSummary) {
+        self.last_month_day = new_summary.last_month_day;
+        self.last_used = new_summary.last_used;
+        self.last_weekday = new_summary.last_weekday;
+    }
+
+    pub(super) fn last_month_day(&self) -> u8 {
+        self.last_month_day
+    }
+
+    pub(super) fn last_weekday(&self) -> u8 {
+        self.last_weekday
+    }
+
+    pub(super) fn last_used(&self) -> LastUsed {
+        self.last_used
+    }
+
+    pub(super) fn set_last_used(&mut self, last_used: LastUsed) {
+        self.last_used = last_used;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct Months(CopyRing<u8>);
 
 impl Seconds {
     pub fn new(copy_ring: CopyRing<u8>) -> Self {
@@ -178,6 +227,7 @@ impl Days {
         let days_in_curr_month = crate::days_in_a_month(month, year);
         match self {
             Days::Both { month, week } => {
+                let (week, summary) = week;
                 let next_day_week = Self::next_day_of_the_week(
                     week,
                     hours_overflow,
@@ -194,42 +244,207 @@ impl Days {
 
                 match (next_day_week.1, next_day_month.1) {
                     (true, true) | (false, false) => match next_day_month.0.cmp(&next_day_week.0) {
-                        Ordering::Less => next_day_month,
-                        Ordering::Equal => next_day_month, // Doesn't matter which one to return
-                        Ordering::Greater => next_day_week,
+                        Ordering::Less => {
+                            summary.last_used = LastUsed::Month;
+                            summary.last_month_day = next_day_month.0;
+                            summary.last_weekday = next_weekday_from_last(
+                                day_of_week,
+                                next_day_month.0,
+                                days_in_curr_month,
+                                day_of_month,
+                            );
+                            next_day_month
+                        }
+                        Ordering::Equal => {
+                            summary.last_used = LastUsed::Both;
+                            summary.last_month_day = next_day_month.0;
+                            summary.last_weekday = week.peek().unwrap();
+                            next_day_month
+                        } // Doesn't matter which one to return
+                        Ordering::Greater => {
+                            summary.last_used = LastUsed::Week;
+                            summary.last_month_day = next_day_week.0;
+                            summary.last_weekday = week.peek().unwrap();
+                            next_day_week
+                        }
                     },
                     (true, false) => {
                         // The month day was sooner, commit to the month day
+                        summary.last_used = LastUsed::Month;
+                        summary.last_month_day = next_day_month.0;
+                        summary.last_weekday = next_weekday_from_last(
+                            day_of_week,
+                            next_day_month.0,
+                            days_in_curr_month,
+                            day_of_month,
+                        );
                         next_day_month
                     }
                     (false, true) => {
                         // The weekday was sooner, commit to the weekday
+                        summary.last_used = LastUsed::Week;
+                        summary.last_month_day = next_day_week.0;
+                        summary.last_weekday = week.peek().unwrap();
                         next_day_week
                     }
                 }
             }
             Days::Month(month) => {
-                Self::next_day_of_the_month(
-                    month,
-                    hours_overflow,
-                    day_of_month,
-                    days_in_curr_month,
-                )
+                Self::next_day_of_the_month(month, hours_overflow, day_of_month, days_in_curr_month)
             }
-            Days::Week(week) => {
-                Self::next_day_of_the_week(
+            Days::Week((week, summary)) => {
+                let next = Self::next_day_of_the_week(
                     week,
                     hours_overflow,
                     day_of_week,
                     day_of_month,
                     days_in_curr_month,
-                )
+                );
+                summary.last_used = LastUsed::Week;
+                summary.last_month_day = next.0;
+                summary.last_weekday = week.peek().unwrap();
+                next
             }
         }
     }
 
-    pub fn next(&mut self, hours_overflow: bool) -> (u8, bool) {
-        todo!()
+    pub fn next(&mut self, hours_overflow: bool, curr_month: u8, curr_year: u32) -> (u8, bool) {
+        use std::cmp::Ordering;
+        let weekday_to_month_day =
+            |weekday: u8, last_weekday: u8, days_in_curr_month: u8| -> (u8, bool) {
+                let days_since_last = Self::num_weekdays_since(last_weekday as i8, weekday as i8);
+                let next_day_of_the_month = last_weekday + days_since_last;
+                let overflow = next_day_of_the_month > days_in_curr_month;
+                let month_day = overflow
+                    .then_some(next_day_of_the_month - days_in_curr_month)
+                    .unwrap_or(next_day_of_the_month);
+                (month_day, overflow)
+            };
+        let days_in_curr_month = crate::days_in_a_month(curr_month, curr_year);
+        match self {
+            Days::Both { month, week } => {
+                let (week, summary) = week;
+
+                // We're checking a couple different things:
+                // - Was there overflow from the hours
+                // - Which field has the soonest day
+                //
+                // Now, if there was no overflow from the hours,
+                // then we're not advancing any field, so there'd
+                // be no change to which field we used last.
+                // I don't even think we'd have to update the
+                // summary, since the days wouldn't change
+                //
+                // If there was overflow from the hours, then we really
+                // gotta do some calculations. We look at which field
+                // we used last and advance that field by one, checking
+                // for overflow there. For the other field, we just peek
+                // the next value, and assume no overflow.
+                //
+                // From there, we compare the next days like we
+                // did for the `first_after` method, and the winner
+                // goes into the summary. Then we return the value too.
+
+                hours_overflow
+                    .then(|| {
+                        let state = match summary.last_used() {
+                            LastUsed::Week => {
+                                let week = week.next().unwrap();
+                                let month = (month.peek().unwrap(), false);
+                                (month, week)
+                            }
+                            LastUsed::Month => {
+                                let month = month.checked_next().unwrap();
+                                let week = week.peek().unwrap();
+                                (month, week)
+                            }
+                            LastUsed::Both => {
+                                let month = month.checked_next().unwrap();
+                                let week = week.next().unwrap();
+                                (month, week)
+                            }
+                        };
+                        let ((monthday, monthday_overflow), weekday) = state;
+
+                        // Week
+                        let (next_day_of_the_month, weekday_overflow) = weekday_to_month_day(
+                            weekday,
+                            summary.last_weekday(),
+                            days_in_curr_month,
+                        );
+                        let week_summary = WeekSummary {
+                            last_month_day: next_day_of_the_month,
+                            last_weekday: weekday,
+                            last_used: LastUsed::Week,
+                        };
+
+                        // Month
+                        let next_day_of_the_week = next_weekday_from_last(
+                            summary.last_weekday(),
+                            monthday,
+                            days_in_curr_month,
+                            summary.last_month_day(),
+                        );
+                        let mut month_summary = WeekSummary {
+                            last_month_day: monthday,
+                            last_weekday: next_day_of_the_week,
+                            last_used: LastUsed::Month,
+                        };
+
+                        // Compare
+                        match (monthday_overflow, weekday_overflow) {
+                            (true, true) | (false, false) => {
+                                match monthday.cmp(&next_day_of_the_month) {
+                                    Ordering::Less => {
+                                        summary.set(month_summary);
+                                        (summary.last_month_day(), monthday_overflow)
+                                    }
+                                    Ordering::Equal => {
+                                        month_summary.set_last_used(LastUsed::Both);
+                                        summary.set(month_summary);
+                                        (summary.last_month_day(), monthday_overflow)
+                                    }
+                                    Ordering::Greater => {
+                                        summary.set(week_summary);
+                                        (summary.last_month_day(), weekday_overflow)
+                                    }
+                                }
+                            }
+                            (true, false) => {
+                                // The weekday was sooner
+                                summary.set(week_summary);
+                                (summary.last_month_day(), weekday_overflow)
+                            }
+                            (false, true) => {
+                                // The monthday was sooner
+                                summary.set(month_summary);
+                                (summary.last_month_day(), monthday_overflow)
+                            }
+                        }
+                    })
+                    .unwrap_or((summary.last_month_day(), false))
+            }
+            Days::Month(month) => hours_overflow
+                .then(|| month.checked_next().unwrap())
+                .unwrap_or((month.peek().unwrap(), false)),
+            Days::Week((week, summary)) => hours_overflow
+                .then(|| {
+                    let next_day_of_the_week = week.next().unwrap();
+                    let (next, overflow) = weekday_to_month_day(
+                        next_day_of_the_week,
+                        summary.last_weekday(),
+                        days_in_curr_month,
+                    );
+                    let week_summary = WeekSummary {
+                        last_month_day: next,
+                        last_weekday: next_day_of_the_week,
+                        last_used: LastUsed::Week,
+                    };
+                    summary.set(week_summary);
+                    (summary.last_month_day(), overflow)
+                })
+                .unwrap_or((summary.last_month_day(), false)),
+        }
     }
 
     fn next_day_of_the_month(
@@ -301,6 +516,16 @@ impl Days {
     }
 }
 
+fn next_weekday_from_last(
+    last_weekday: u8,
+    next_day_month: u8,
+    days_in_curr_month: u8,
+    last_day_of_month: u8,
+) -> u8 {
+    let days_in_a_week = 7;
+    (last_weekday + (next_day_month + days_in_curr_month - last_day_of_month)) % days_in_a_week
+}
+
 impl Months {
     pub fn new(copy_ring: CopyRing<u8>) -> Self {
         Self(copy_ring)
@@ -326,6 +551,14 @@ impl Months {
             (self.0.peek().unwrap(), final_overflow)
         } else {
             (self.0.peek().unwrap(), true)
+        }
+    }
+
+    pub fn next(&mut self, days_overflow: bool) -> (u8, bool) {
+        if days_overflow {
+            self.0.checked_next().unwrap()
+        } else {
+            (self.0.peek().unwrap(), false)
         }
     }
 }

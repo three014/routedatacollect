@@ -5,32 +5,22 @@ use std::fmt::Debug;
 pub struct ScheduleIter<'a, Tz: TimeZone> {
     schedule: &'a mut Schedule,
     next: Option<DateTime<Tz>>,
-    tz: Tz,
 }
 
 pub struct OwnedScheduleIter<Tz: TimeZone> {
     schedule: Schedule,
     next: Option<DateTime<Tz>>,
-    tz: Tz,
 }
 
 impl<'a, Tz: TimeZone> ScheduleIter<'a, Tz> {
-    pub fn new(schedule: &'a mut Schedule, next: Option<DateTime<Tz>>, timezone: Tz) -> Self {
-        Self {
-            schedule,
-            next,
-            tz: timezone,
-        }
+    pub fn new(schedule: &'a mut Schedule, next: Option<DateTime<Tz>>) -> Self {
+        Self { schedule, next }
     }
 }
 
 impl<Tz: TimeZone> OwnedScheduleIter<Tz> {
-    pub fn new(schedule: Schedule, next: Option<DateTime<Tz>>, timezone: Tz) -> Self {
-        Self {
-            schedule,
-            next,
-            tz: timezone,
-        }
+    pub fn new(schedule: Schedule, next: Option<DateTime<Tz>>) -> Self {
+        Self { schedule, next }
     }
 }
 
@@ -38,7 +28,9 @@ impl<'a, Tz: TimeZone + 'static> Iterator for ScheduleIter<'a, Tz> {
     type Item = DateTime<Tz>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        Some(self.schedule.next(&self.tz))
+        let now = self.next.take()?;
+        self.next = self.schedule.next(&now);
+        Some(now)
     }
 }
 
@@ -46,7 +38,9 @@ impl<Tz: TimeZone + 'static> Iterator for OwnedScheduleIter<Tz> {
     type Item = DateTime<Tz>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        Some(self.schedule.next(&self.tz))
+        let now = self.next.take()?;
+        self.next = self.schedule.next(&now);
+        Some(now)
     }
 }
 
@@ -56,11 +50,6 @@ impl<Tz: TimeZone + 'static> Iterator for OwnedScheduleIter<Tz> {
 /// the `Copy` trait, so this is mostly
 /// meant to be used with number and
 /// enum types.
-///
-/// Implements the `Iterator` trait,
-/// but will never end unless it's
-/// cut short with `CopyRing::take`
-/// or `CopyRing::one_cycle`.
 #[derive(Clone, Debug)]
 pub struct CopyRing<T>
 where

@@ -11,7 +11,7 @@ pub mod schedule {
         iterator::{OwnedScheduleIter, ScheduleIter},
     };
     use crate::Error;
-    use chrono::{DateTime, TimeZone, Utc};
+    use chrono::{DateTime, Datelike, TimeZone, Utc};
     use std::str::FromStr;
 
     mod fields;
@@ -28,7 +28,7 @@ pub mod schedule {
             tz: Tz,
         ) -> impl Iterator<Item = DateTime<Tz>> + '_ {
             let first = self.recalibrate(&tz);
-            ScheduleIter::new(self, first, tz)
+            ScheduleIter::new(self, first)
         }
 
         fn recalibrate<Tz: TimeZone + Clone + 'static>(&mut self, tz: &Tz) -> Option<DateTime<Tz>> {
@@ -41,11 +41,18 @@ pub mod schedule {
             tz: Tz,
         ) -> impl Iterator<Item = DateTime<Tz>> {
             let first = self.recalibrate(&tz);
-            OwnedScheduleIter::new(self, first, tz)
+            OwnedScheduleIter::new(self, first)
         }
 
-        fn next<Tz: TimeZone + 'static>(&mut self, tz: &Tz) -> Option<DateTime<Tz>> {
-            todo!()
+        fn next<Tz: TimeZone + 'static>(
+            &mut self,
+            datetime: &DateTime<Tz>,
+        ) -> Option<DateTime<Tz>> {
+            let month = datetime.month() as u8;
+            let year = datetime.year() as u32;
+            self.fields
+                .next(month, year)
+                .and_then(|dt| dt.and_local_timezone(datetime.timezone()).earliest())
         }
     }
 

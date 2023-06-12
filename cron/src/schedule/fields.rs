@@ -1,5 +1,4 @@
 use self::inner::{Days, Hours, Minutes, Months, Seconds};
-
 use super::iterator::CopyRing;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 
@@ -19,7 +18,6 @@ pub struct FieldTable {
     hours: Hours,
     days: Days,
     months: Months,
-    years_from_next: u8,
 }
 
 /// A builder pattern for the `FieldTable`.
@@ -87,7 +85,7 @@ impl Builder {
     }
 
     pub fn with_days_of_the_week_only(&mut self, days: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.days = Some(Days::Week(CopyRing::from_iter(days)));
+        self.days = Some(Days::Week((CopyRing::from_iter(days), Default::default())));
         self
     }
 
@@ -98,7 +96,7 @@ impl Builder {
     ) -> &mut Self {
         self.days = Some(Days::Both {
             month: CopyRing::from_iter(month),
-            week: CopyRing::from_iter(week),
+            week: (CopyRing::from_iter(week), Default::default()),
         });
         self
     }
@@ -131,9 +129,9 @@ impl Builder {
                 Days::Both {
                     ref month,
                     ref week,
-                } => month.is_empty() || week.is_empty(),
+                } => month.is_empty() || week.0.is_empty(),
                 Days::Month(ref month) => month.is_empty(),
-                Days::Week(ref week) => week.is_empty(),
+                Days::Week(ref week) => week.0.is_empty(),
             }
             || months.is_empty()
         {
@@ -148,12 +146,12 @@ impl Builder {
                     ref month,
                     ref week,
                 } => {
-                    month.last().unwrap() >= 31
+                    month.last().unwrap() > 31
                         || month.first().unwrap() < 1
-                        || week.last().unwrap() >= 7
+                        || week.0.last().unwrap() >= 7
                 }
-                Days::Month(ref month) => month.last().unwrap() >= 31 || month.first().unwrap() < 1,
-                Days::Week(ref week) => week.last().unwrap() >= 7,
+                Days::Month(ref month) => month.last().unwrap() > 31 || month.first().unwrap() < 1,
+                Days::Week(ref week) => week.0.last().unwrap() >= 7,
             }
             || months.last().unwrap() > 12
             || months.first().unwrap() < 1
@@ -167,7 +165,6 @@ impl Builder {
             hours: Hours::new(hrs),
             days,
             months: Months::new(months),
-            years_from_next: 0,
         })
     }
 }
@@ -189,9 +186,9 @@ impl FieldTable {
         &mut self,
         date_time: &DateTime<Tz>,
     ) -> Option<NaiveDateTime> {
-        let (secs, overflow) = self.secs.first_after(date_time.second() as u8);
-        let (mins, overflow) = self.mins.first_after(date_time.minute() as u8, overflow);
-        let (hours, overflow) = self.hours.first_after(date_time.hour() as u8, overflow);
+        let (sec, overflow) = self.secs.first_after(date_time.second() as u8);
+        let (min, overflow) = self.mins.first_after(date_time.minute() as u8, overflow);
+        let (hour, overflow) = self.hours.first_after(date_time.hour() as u8, overflow);
         let (day, overflow) = self.days.first_after(
             date_time.day() as u8,
             date_time.weekday().num_days_from_sunday() as u8,
@@ -200,15 +197,22 @@ impl FieldTable {
             date_time.year() as u32,
         );
         let (month, overflow) = self.months.first_after(overflow, date_time.month() as u8);
-        self.years_from_next = overflow as u8;
-        let year = date_time.year() + self.years_from_next as i32;
+        let year = date_time.year() + overflow as i32;
 
         NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
-            .and_then(|date| date.and_hms_opt(hours as u32, mins as u32, secs as u32))
+            .and_then(|date| date.and_hms_opt(hour as u32, min as u32, sec as u32))
     }
 
-    pub fn next(&mut self) -> Option<NaiveDateTime> {
-        todo!()
+    pub fn next(&mut self, curr_month: u8, curr_year: u32) -> Option<NaiveDateTime> {
+        let (sec, overflow) = self.secs.next();
+        let (min, overflow) = self.mins.next(overflow);
+        let (hour, overflow) = self.hours.next(overflow);
+        let (day, overflow) = self.days.next(overflow, curr_month, curr_year);
+        let (month, overflow) = self.months.next(overflow);
+        let year = curr_year + overflow as u32;
+
+        NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
+            .and_then(|date| date.and_hms_opt(hour as u32, min as u32, sec as u32))
     }
 
     pub fn builder() -> Builder {
