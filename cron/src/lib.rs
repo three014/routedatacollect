@@ -61,84 +61,94 @@ pub mod schedule {
 
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             let fields: Vec<&str> = s.split_whitespace().collect();
-            Ok(match fields.len() {
-            0 => Err(Error::Empty),
-            1 => {
-                let mut maybe_macro = fields[0].chars();
-                maybe_macro
-                    .next()
-                    .ok_or(Error::Unknown)?
-                    .eq(&'@')
-                    .then(|| match maybe_macro.next().ok_or(Error::InvalidMacro)? {
-                        'y' | 'a' => Ok(Schedule {
-                            fields: Box::new(
-                                FieldTable::builder()
-                                    .with_secs(0..=0)
-                                    .with_mins(0..=0)
-                                    .with_hrs(0..=0)
-                                    .with_days_of_the_month_only(1..=1)
-                                    .with_months(1..=1)
-                                    .build()
-                                    .unwrap()
-                            )
-                        }),
-                        'm' => Ok(Schedule {
-                            fields: Box::new(
-                                FieldTable::builder()
-                                    .with_secs(0..=0)
-                                    .with_mins(0..=0)
-                                    .with_hrs(0..=0)
-                                    .with_days_of_the_month_only(1..=1)
-                                    .with_months(1..=12)
-                                    .build()
-                                    .unwrap()
-                            )
-                        }),
-                        'w' => Ok(Schedule {
-                            fields: Box::new(
-                                FieldTable::builder()
-                                    .with_secs(0..=0)
-                                    .with_mins(0..=0)
-                                    .with_hrs(0..=0)
-                                    .with_days_of_the_week_only(0..=0)
-                                    .with_months(1..=12)
-                                    .build()
-                                    .unwrap()
-                            )
-                        }),
-                        'd' => Ok(Schedule {
-                            fields: Box::new(
-                                FieldTable::builder()
-                                    .with_secs(0..=0)
-                                    .with_mins(0..=0)
-                                    .with_hrs(0..=0)
-                                    .with_days_of_the_month_only(1..=12)
-                                    .with_months(1..=12)
-                                    .build()
-                                    .unwrap()
-                            )
-                        }),
-                        'h' => Ok(Schedule {
-                            fields: Box::new(
-                                FieldTable::builder()
-                                    .with_secs(0..=0)
-                                    .with_mins(0..=0)
-                                    .with_hrs(0..24)
-                                    .with_days_of_the_month_only(1..=12)
-                                    .with_months(1..=12)
-                                    .build()
-                                    .unwrap()
-                            )
-                        }),
-                        _ => Err(Error::InvalidMacro),
-                    })
-                    .unwrap_or(Err(Error::WrongNumberOfFields))
+            match fields.len() {
+                0 => Err(Error::Empty),
+                1 => {
+                    let mut maybe_macro = fields[0].chars();
+                    maybe_macro
+                        .next()
+                        .ok_or(Error::Unknown)?
+                        .eq(&'@')
+                        .then(|| match maybe_macro.next().ok_or(Error::InvalidMacro)? {
+                            'y' | 'a' => Ok(Schedule {
+                                fields: Box::new(annually())
+                            }),
+                            'm' => Ok(Schedule {
+                                fields: Box::new(monthly())
+                            }),
+                            'w' => Ok(Schedule {
+                                fields: Box::new(weekly())
+                            }),
+                            'd' => Ok(Schedule {
+                                fields: Box::new(daily())
+                            }),
+                            'h' => Ok(Schedule {
+                                fields: Box::new(hourly())
+                            }),
+                            _ => Err(Error::InvalidMacro),
+                        })
+                        .unwrap_or(Err(Error::WrongNumberOfFields))
+                }
+                5 => unimplemented!("Will eventually be the equivalent of the 6-field version, but with '00' for seconds."),
+                6 => todo!(),
+                _ => Err(Error::WrongNumberOfFields),
             }
-            5 => unimplemented!("Will eventually be the equivalent of the 6-field version, but with '00' for seconds."),
-            6 => todo!(),
-            _ => Err(Error::WrongNumberOfFields),
-        }?)
         }
+    }
+
+    fn hourly() -> FieldTable {
+        FieldTable::builder()
+            .with_secs(0)
+            .with_mins(0)
+            .with_hrs_iter(0..24)
+            .with_days_of_the_month_only_iter(1..=31)
+            .with_months_iter(1..=12)
+            .build()
+            .unwrap()
+    }
+
+    fn daily() -> FieldTable {
+        FieldTable::builder()
+            .with_secs(0)
+            .with_mins(0)
+            .with_hrs(0)
+            .with_days_of_the_month_only_iter(1..=31)
+            .with_months_iter(1..=12)
+            .build()
+            .unwrap()
+    }
+
+    fn weekly() -> FieldTable {
+        FieldTable::builder()
+            .with_secs(0)
+            .with_mins(0)
+            .with_hrs(0)
+            .with_days_of_the_week_only(0)
+            .with_months_iter(1..=12)
+            .build()
+            .unwrap()
+    }
+
+    fn annually() -> FieldTable {
+        FieldTable::builder()
+            .with_secs(0)
+            .with_mins(0)
+            .with_hrs(0)
+            .with_days_of_the_month_only(1)
+            .with_months(1)
+            .build()
+            .unwrap()
+    }
+
+    fn monthly() -> FieldTable {
+        FieldTable::builder()
+            .with_secs(0)
+            .with_mins(0)
+            .with_hrs(0)
+            .with_days_of_the_month_only(1)
+            .with_months_iter(1..=12)
+            .build()
+            .unwrap()
     }
 
     #[cfg(test)]

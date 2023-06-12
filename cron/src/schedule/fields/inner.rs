@@ -19,7 +19,7 @@ pub(super) enum Days {
     Week((CopyRing<u8>, WeekSummary)),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct WeekSummary {
     last_month_day: u8,
     last_weekday: u8,
@@ -32,16 +32,6 @@ pub(super) enum LastUsed {
     #[default]
     Month,
     Both,
-}
-
-impl Default for WeekSummary {
-    fn default() -> Self {
-        Self {
-            last_weekday: Default::default(),
-            last_month_day: Default::default(),
-            last_used: Default::default(),
-        }
-    }
 }
 
 impl WeekSummary {
@@ -315,9 +305,11 @@ impl Days {
                 let days_since_last = Self::num_weekdays_since(last_weekday as i8, weekday as i8);
                 let next_day_of_the_month = last_weekday + days_since_last;
                 let overflow = next_day_of_the_month > days_in_curr_month;
-                let month_day = overflow
-                    .then_some(next_day_of_the_month - days_in_curr_month)
-                    .unwrap_or(next_day_of_the_month);
+                let month_day = if overflow {
+                    next_day_of_the_month - days_in_curr_month
+                } else {
+                    next_day_of_the_month
+                };
                 (month_day, overflow)
             };
         let days_in_curr_month = crate::days_in_a_month(curr_month, curr_year);

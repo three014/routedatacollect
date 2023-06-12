@@ -27,10 +27,9 @@ pub struct FieldTable {
 /// Each method accepts an item that impl's
 /// `Into<CopyRing<u8>>`, which is any of the
 /// following:
-///
-///     - a single value `u8`
-///     - any struct that impl's `IntoIterator<Item = u8>`
-///     - a `Vec<u8>` itself
+/// - a single value `u8`
+/// - any struct that impl's `IntoIterator<Item = u8>`
+/// - a `Vec<u8>` itself
 ///     
 /// The only field that behaves differently is the `Day` field.
 /// For the days, choose one of the
@@ -55,6 +54,7 @@ pub struct FieldTable {
 /// The main assumption that will not be tested is that
 /// the supplied field values are sorted, and that
 /// the first value is the lowest in the range.
+#[derive(Default)]
 pub struct Builder {
     secs: Option<CopyRing<u8>>,
     mins: Option<CopyRing<u8>>,
@@ -64,32 +64,63 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn with_secs(&mut self, secs: impl IntoIterator<Item = u8>) -> &mut Self {
+    pub fn with_secs_iter(&mut self, secs: impl IntoIterator<Item = u8>) -> &mut Self {
         self.secs = Some(CopyRing::from_iter(secs));
         self
     }
 
-    pub fn with_mins(&mut self, mins: impl IntoIterator<Item = u8>) -> &mut Self {
+    pub fn with_secs(&mut self, secs: impl Into<CopyRing<u8>>) -> &mut Self {
+        self.secs = Some(secs.into());
+        self
+    }
+
+    pub fn with_mins_iter(&mut self, mins: impl IntoIterator<Item = u8>) -> &mut Self {
         self.mins = Some(CopyRing::from_iter(mins));
         self
     }
 
-    pub fn with_hrs(&mut self, hrs: impl IntoIterator<Item = u8>) -> &mut Self {
+    pub fn with_mins(&mut self, mins: impl Into<CopyRing<u8>>) -> &mut Self {
+        self.mins = Some(mins.into());
+        self
+    }
+
+    pub fn with_hrs_iter(&mut self, hrs: impl IntoIterator<Item = u8>) -> &mut Self {
         self.hrs = Some(CopyRing::from_iter(hrs));
         self
     }
 
-    pub fn with_days_of_the_month_only(&mut self, days: impl IntoIterator<Item = u8>) -> &mut Self {
+    pub fn with_hrs(&mut self, hrs: impl Into<CopyRing<u8>>) -> &mut Self {
+        self.mins = Some(hrs.into());
+        self
+    }
+
+    pub fn with_days_of_the_month_only_iter(
+        &mut self,
+        days: impl IntoIterator<Item = u8>,
+    ) -> &mut Self {
         self.days = Some(Days::Month(CopyRing::from_iter(days)));
         self
     }
 
-    pub fn with_days_of_the_week_only(&mut self, days: impl IntoIterator<Item = u8>) -> &mut Self {
+    pub fn with_days_of_the_month_only(&mut self, days: impl Into<CopyRing<u8>>) -> &mut Self {
+        self.days = Some(Days::Month(days.into()));
+        self
+    }
+
+    pub fn with_days_of_the_week_only_iter(
+        &mut self,
+        days: impl IntoIterator<Item = u8>,
+    ) -> &mut Self {
         self.days = Some(Days::Week((CopyRing::from_iter(days), Default::default())));
         self
     }
 
-    pub fn with_days_of_both(
+    pub fn with_days_of_the_week_only(&mut self, days: impl Into<CopyRing<u8>>) -> &mut Self {
+        self.days = Some(Days::Week((days.into(), Default::default())));
+        self
+    }
+
+    pub fn with_days_of_both_iter(
         &mut self,
         week: impl IntoIterator<Item = u8>,
         month: impl IntoIterator<Item = u8>,
@@ -101,8 +132,25 @@ impl Builder {
         self
     }
 
-    pub fn with_months(&mut self, months: impl IntoIterator<Item = u8>) -> &mut Self {
+    pub fn with_days_of_both(
+        &mut self,
+        week: impl Into<CopyRing<u8>>,
+        month: impl Into<CopyRing<u8>>,
+    ) -> &mut Self {
+        self.days = Some(Days::Both {
+            month: month.into(),
+            week: (week.into(), Default::default()),
+        });
+        self
+    }
+
+    pub fn with_months_iter(&mut self, months: impl IntoIterator<Item = u8>) -> &mut Self {
         self.months = Some(CopyRing::from_iter(months));
+        self
+    }
+
+    pub fn with_months(&mut self, months: impl Into<CopyRing<u8>>) -> &mut Self {
+        self.mins = Some(months.into());
         self
     }
 
@@ -169,18 +217,6 @@ impl Builder {
     }
 }
 
-impl Default for Builder {
-    fn default() -> Self {
-        Self {
-            secs: Default::default(),
-            mins: Default::default(),
-            hrs: Default::default(),
-            days: Default::default(),
-            months: Default::default(),
-        }
-    }
-}
-
 impl FieldTable {
     pub fn after<Tz: TimeZone + 'static>(
         &mut self,
@@ -199,7 +235,7 @@ impl FieldTable {
         let (month, overflow) = self.months.first_after(overflow, date_time.month() as u8);
         let year = date_time.year() + overflow as i32;
 
-        NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
+        NaiveDate::from_ymd_opt(year, month as u32, day as u32)
             .and_then(|date| date.and_hms_opt(hour as u32, min as u32, sec as u32))
     }
 
