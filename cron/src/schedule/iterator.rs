@@ -57,6 +57,7 @@ where
 {
     index: usize,
     collection: Vec<T>,
+    init: bool,
 }
 
 impl<T> CopyRing<T>
@@ -69,6 +70,7 @@ where
     /// that first item.
     pub fn reset(&mut self) {
         self.index = 0;
+        self.set_init(false);
     }
 
     /// Rotates the ring to the left, yielding `Copyring::period`
@@ -106,9 +108,13 @@ where
     ///
     /// True if wrapping occurred, false otherwise.
     pub fn checked_next(&mut self) -> Option<(T, bool)> {
+        let was_init = self.is_init();
         let prev_index = self.index;
         let next = self.next()?;
-        Some((next, prev_index == 0))
+        // Bug: if the ring was created and we're on index 0,
+        // then calling this function yields true, even though
+        // we didn't wrap around.
+        Some((next, prev_index == 0 && was_init))
     }
 
     /// Rotates the ring to the left, yielding each value until the
@@ -133,6 +139,7 @@ where
 
     pub fn rotate_left(&mut self, n: usize) {
         self.index = (self.index + n) % self.period();
+        self.set_init(true);
         //println!("Rotated left - new index: {}", self.index);
     }
 
@@ -141,6 +148,7 @@ where
         let idx = self.index as isize;
         let x = n as isize;
         self.index = ((-((x - idx) % len) + len) % len) as usize;
+        self.set_init(true);
         //println!("Rotated right - new index: {}", self.index);
     }
 
@@ -184,6 +192,14 @@ where
             n,
         }
     }
+
+    pub fn set_init(&mut self, init: bool) {
+        self.init = init;
+    }
+
+    pub fn is_init(&self) -> bool {
+        self.init
+    }
 }
 
 pub struct CycleIterMut<'a, T: Copy> {
@@ -199,9 +215,12 @@ struct CycleIter<'a, T: Copy> {
 
 impl<'a, T: Copy> CycleIterMut<'a, T> {
     pub fn checked_next(&mut self) -> Option<(T, bool)> {
-        let prev_index = self.ring.index;
-        let next = self.next()?;
-        Some((next, prev_index == 0))
+        if self.n == 0 {
+            None
+        } else {
+            self.n -= 1;
+            self.ring.checked_next()
+        }
     }
 
     pub fn checked(self) -> impl Iterator<Item = (T, bool)> + 'a {
@@ -211,6 +230,10 @@ impl<'a, T: Copy> CycleIterMut<'a, T> {
 
             fn next(&mut self) -> Option<Self::Item> {
                 self.0.checked_next()
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.0.size_hint()
             }
         }
         impl<'a, T: Copy> ExactSizeIterator for Checked<'a, T> {}
@@ -266,6 +289,7 @@ where
         Self {
             index: 0,
             collection: vec![value],
+            init: false,
         }
     }
 }
@@ -278,6 +302,7 @@ where
         Self {
             index: 0,
             collection: value,
+            init: false,
         }
     }
 }
@@ -290,6 +315,7 @@ where
         Self {
             index: 0,
             collection: iter.into_iter().collect(),
+            init: false,
         }
     }
 }

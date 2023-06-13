@@ -1,3 +1,4 @@
+#[derive(Debug, Clone, Copy)]
 pub enum Error {
     Empty,
     WrongNumberOfFields,

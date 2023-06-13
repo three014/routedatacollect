@@ -1,3 +1,5 @@
+use std::cmp::min;
+
 use crate::schedule::iterator::CopyRing;
 
 #[derive(Clone, Debug)]
@@ -126,9 +128,11 @@ impl Minutes {
                 overflow = minutes.1;
                 break;
             }
+            eprintln!("minute: {:?} --- mins: {}", minutes, mins);
         }
         if secs_overflow {
-            overflow = self.0.checked_next().unwrap().1 || overflow
+            overflow = self.0.checked_next().unwrap().1 || overflow;
+            dbg!(overflow);
         }
         if found {
             self.0.rotate_right(1);
@@ -508,7 +512,15 @@ impl Days {
     }
 }
 
-fn next_weekday_from_last(
+/// # Currently doesn't work
+/// 
+/// Works if the next day is from the next month,
+/// but fails if the next day is in the previous month.
+/// 
+/// Even worse, this function doesn't factor in 
+/// what happens if the next day is more than one month
+/// away.
+pub(crate) fn next_weekday_from_last(
     last_weekday: u8,
     next_day_month: u8,
     days_in_curr_month: u8,

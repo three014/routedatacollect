@@ -21,6 +21,24 @@ fn one_cycle_fn_equals_origin_vec() {
 }
 
 #[test]
+fn checked_next_only_true_when_wrap_occurs() {
+    let mut ring = CopyRing::from_iter(0..3);
+    assert!(!ring.is_init());
+
+    let next = ring.checked_next().unwrap();
+    assert!(ring.is_init());
+
+    assert_eq!(0, next.0);
+    assert_eq!(false, next.1);
+
+    ring.rotate_left(2);
+    let next = ring.checked_next().unwrap();
+    
+    assert_eq!(0, next.0);
+    assert_eq!(true, next.1);
+}
+
+#[test]
 fn first_next_equals_first_value() {
     let mut ring = CopyRing::from(vec![2, 5, 7, 8]);
     assert_eq!(2, ring.next().unwrap())
