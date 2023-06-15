@@ -8,14 +8,14 @@ pub enum Error {
 
 pub mod schedule {
     use self::{
-        fields::FieldTable,
+        table::FieldTable,
         iterator::{OwnedScheduleIter, ScheduleIter},
     };
     use crate::Error;
     use chrono::{DateTime, Datelike, TimeZone, Utc};
     use std::str::FromStr;
 
-    mod fields;
+    mod table;
     mod iterator;
 
     #[derive(Clone, Debug)]

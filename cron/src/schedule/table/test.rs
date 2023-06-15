@@ -1,4 +1,4 @@
-use super::{Days, Minutes, Seconds, inner::{Hours, next_weekday_from_last}};
+use super::{Days, Minutes, Seconds, fields::{Hours, next_weekday_from_last}};
 use crate::schedule::iterator::CopyRing;
 use chrono::{Datelike, Timelike, Utc};
 use rand::Rng;
