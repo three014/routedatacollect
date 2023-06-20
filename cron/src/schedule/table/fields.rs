@@ -2,25 +2,25 @@ use self::{
     date::{DayCache, Days, Months},
     time::{Hours, Minutes, Seconds},
 };
+use super::{Error, CronRing};
 use crate::schedule::iterator::CopyRing;
-
-use super::Error;
+use chrono::{NaiveDate, NaiveTime};
 
 mod date {
-    use crate::schedule::iterator::CopyRing;
+    use crate::schedule::{iterator::CopyRing, table::CronRing};
 
     #[derive(Clone, Debug)]
     pub enum Days {
         Both {
-            month: CopyRing<u8>,
-            week: (CopyRing<u8>, DayCache),
+            month: CronRing,
+            week: (CronRing, DayCache),
         },
-        Month(CopyRing<u8>),
-        Week((CopyRing<u8>, DayCache)),
+        Month(CronRing),
+        Week((CronRing, DayCache)),
     }
 
     #[derive(Clone, Debug)]
-    pub struct Months(CopyRing<u8>);
+    pub struct Months(CronRing);
 
     #[derive(Clone, Debug, Default)]
     pub struct DayCache {
@@ -37,6 +37,18 @@ mod date {
         Both,
     }
 
+    #[derive(Clone, Debug)]
+    pub enum NextDay {
+        /// The next weekday, from 0-6, Sun-Sat
+        Week(u8),
+        Both {
+            week: u8,
+            month: Option<u8>,
+        },
+        /// The next day of the month, from 1-31
+        Month(Option<u8>),
+    }
+
     impl DayCache {
         pub fn set(&mut self, new_summary: DayCache) {
             self.last_month_day = new_summary.last_month_day;
@@ -44,15 +56,15 @@ mod date {
             self.last_weekday = new_summary.last_weekday;
         }
 
-        pub(super) fn last_month_day(&self) -> u8 {
+        pub(super) const fn last_month_day(&self) -> u8 {
             self.last_month_day
         }
 
-        pub(super) fn last_weekday(&self) -> u8 {
+        pub(super) const fn last_weekday(&self) -> u8 {
             self.last_weekday
         }
 
-        pub(super) fn last_used(&self) -> LastUsed {
+        pub(super) const fn last_used(&self) -> LastUsed {
             self.last_used
         }
 
@@ -62,312 +74,22 @@ mod date {
     }
 
     impl Days {
-        pub fn first_after(
-            &mut self,
-            day_of_month: u8,
-            day_of_week: u8, /* Sunday = 0 -----> Saturday = 6 */
-            hours_overflow: bool,
-            month: u8,
-            year: u32,
-        ) -> (u8, bool) {
-            use std::cmp::Ordering;
-            let days_in_curr_month = crate::days_in_a_month(month, year);
+        pub fn reset(&mut self) {
             match self {
-                Days::Both { month, week } => {
-                    let (week, summary) = week;
-                    let next_day_week = Self::next_day_of_the_week(
-                        week,
-                        hours_overflow,
-                        day_of_week,
-                        day_of_month,
-                        days_in_curr_month,
-                    );
-                    let next_day_month = Self::next_day_of_the_month(
-                        month,
-                        hours_overflow,
-                        day_of_month,
-                        days_in_curr_month,
-                    );
-
-                    match (next_day_week.1, next_day_month.1) {
-                        (true, true) | (false, false) => {
-                            match next_day_month.0.cmp(&next_day_week.0) {
-                                Ordering::Less => {
-                                    summary.last_used = LastUsed::Month;
-                                    summary.last_month_day = next_day_month.0;
-                                    summary.last_weekday = next_weekday_from_last(
-                                        day_of_week,
-                                        next_day_month.0,
-                                        days_in_curr_month,
-                                        day_of_month,
-                                    );
-                                    next_day_month
-                                }
-                                Ordering::Equal => {
-                                    summary.last_used = LastUsed::Both;
-                                    summary.last_month_day = next_day_month.0;
-                                    summary.last_weekday = week.peek().unwrap();
-                                    next_day_month
-                                } // Doesn't matter which one to return
-                                Ordering::Greater => {
-                                    summary.last_used = LastUsed::Week;
-                                    summary.last_month_day = next_day_week.0;
-                                    summary.last_weekday = week.peek().unwrap();
-                                    next_day_week
-                                }
-                            }
-                        }
-                        (true, false) => {
-                            // The month day was sooner, commit to the month day
-                            summary.last_used = LastUsed::Month;
-                            summary.last_month_day = next_day_month.0;
-                            summary.last_weekday = next_weekday_from_last(
-                                day_of_week,
-                                next_day_month.0,
-                                days_in_curr_month,
-                                day_of_month,
-                            );
-                            next_day_month
-                        }
-                        (false, true) => {
-                            // The weekday was sooner, commit to the weekday
-                            summary.last_used = LastUsed::Week;
-                            summary.last_month_day = next_day_week.0;
-                            summary.last_weekday = week.peek().unwrap();
-                            next_day_week
-                        }
-                    }
-                }
-                Days::Month(month) => Self::next_day_of_the_month(
+                Days::Both {
                     month,
-                    hours_overflow,
-                    day_of_month,
-                    days_in_curr_month,
-                ),
-                Days::Week((week, summary)) => {
-                    let next = Self::next_day_of_the_week(
-                        week,
-                        hours_overflow,
-                        day_of_week,
-                        day_of_month,
-                        days_in_curr_month,
-                    );
-                    summary.last_used = LastUsed::Week;
-                    summary.last_month_day = next.0;
-                    summary.last_weekday = week.peek().unwrap();
-                    next
+                    week: (week, _),
+                } => {
+                    month.reset();
+                    week.reset();
                 }
+                Days::Month(month) => month.reset(),
+                Days::Week((week, _)) => week.reset(),
             }
         }
 
-        pub fn next(&mut self, hours_overflow: bool, curr_month: u8, curr_year: u32) -> (u8, bool) {
-            use std::cmp::Ordering;
-            let weekday_to_month_day =
-                |weekday: u8, last_weekday: u8, days_in_curr_month: u8| -> (u8, bool) {
-                    let days_since_last =
-                        Self::num_weekdays_since(last_weekday as i8, weekday as i8);
-                    let next_day_of_the_month = last_weekday + days_since_last;
-                    let overflow = next_day_of_the_month > days_in_curr_month;
-                    let month_day = if overflow {
-                        next_day_of_the_month - days_in_curr_month
-                    } else {
-                        next_day_of_the_month
-                    };
-                    (month_day, overflow)
-                };
-            let days_in_curr_month = crate::days_in_a_month(curr_month, curr_year);
-            match self {
-                Days::Both { month, week } => {
-                    let (week, summary) = week;
-
-                    // We're checking a couple different things:
-                    // - Was there overflow from the hours
-                    // - Which field has the soonest day
-                    //
-                    // Now, if there was no overflow from the hours,
-                    // then we're not advancing any field, so there'd
-                    // be no change to which field we used last.
-                    // I don't even think we'd have to update the
-                    // summary, since the days wouldn't change
-                    //
-                    // If there was overflow from the hours, then we really
-                    // gotta do some calculations. We look at which field
-                    // we used last and advance that field by one, checking
-                    // for overflow there. For the other field, we just peek
-                    // the next value, and assume no overflow.
-                    //
-                    // From there, we compare the next days like we
-                    // did for the `first_after` method, and the winner
-                    // goes into the summary. Then we return the value too.
-
-                    hours_overflow
-                        .then(|| {
-                            let state = match summary.last_used() {
-                                LastUsed::Week => {
-                                    let week = week.next().unwrap();
-                                    let month = (month.peek().unwrap(), false);
-                                    (month, week)
-                                }
-                                LastUsed::Month => {
-                                    let month = month.checked_next().unwrap();
-                                    let week = week.peek().unwrap();
-                                    (month, week)
-                                }
-                                LastUsed::Both => {
-                                    let month = month.checked_next().unwrap();
-                                    let week = week.next().unwrap();
-                                    (month, week)
-                                }
-                            };
-                            let ((monthday, monthday_overflow), weekday) = state;
-
-                            // Week
-                            let (next_day_of_the_month, weekday_overflow) = weekday_to_month_day(
-                                weekday,
-                                summary.last_weekday(),
-                                days_in_curr_month,
-                            );
-                            let week_summary = DayCache {
-                                last_month_day: next_day_of_the_month,
-                                last_weekday: weekday,
-                                last_used: LastUsed::Week,
-                            };
-
-                            // Month
-                            let next_day_of_the_week = next_weekday_from_last(
-                                summary.last_weekday(),
-                                monthday,
-                                days_in_curr_month,
-                                summary.last_month_day(),
-                            );
-                            let mut month_summary = DayCache {
-                                last_month_day: monthday,
-                                last_weekday: next_day_of_the_week,
-                                last_used: LastUsed::Month,
-                            };
-
-                            // Compare
-                            match (monthday_overflow, weekday_overflow) {
-                                (true, true) | (false, false) => {
-                                    match monthday.cmp(&next_day_of_the_month) {
-                                        Ordering::Less => {
-                                            summary.set(month_summary);
-                                            (summary.last_month_day(), monthday_overflow)
-                                        }
-                                        Ordering::Equal => {
-                                            month_summary.set_last_used(LastUsed::Both);
-                                            summary.set(month_summary);
-                                            (summary.last_month_day(), monthday_overflow)
-                                        }
-                                        Ordering::Greater => {
-                                            summary.set(week_summary);
-                                            (summary.last_month_day(), weekday_overflow)
-                                        }
-                                    }
-                                }
-                                (true, false) => {
-                                    // The weekday was sooner
-                                    summary.set(week_summary);
-                                    (summary.last_month_day(), weekday_overflow)
-                                }
-                                (false, true) => {
-                                    // The monthday was sooner
-                                    summary.set(month_summary);
-                                    (summary.last_month_day(), monthday_overflow)
-                                }
-                            }
-                        })
-                        .unwrap_or((summary.last_month_day(), false))
-                }
-                Days::Month(month) => hours_overflow
-                    .then(|| month.checked_next().unwrap())
-                    .unwrap_or((month.peek().unwrap(), false)),
-                Days::Week((week, summary)) => hours_overflow
-                    .then(|| {
-                        let next_day_of_the_week = week.next().unwrap();
-                        let (next, overflow) = weekday_to_month_day(
-                            next_day_of_the_week,
-                            summary.last_weekday(),
-                            days_in_curr_month,
-                        );
-                        let week_summary = DayCache {
-                            last_month_day: next,
-                            last_weekday: next_day_of_the_week,
-                            last_used: LastUsed::Week,
-                        };
-                        summary.set(week_summary);
-                        (summary.last_month_day(), overflow)
-                    })
-                    .unwrap_or((summary.last_month_day(), false)),
-            }
-        }
-
-        fn next_day_of_the_month(
-            days: &mut CopyRing<u8>,
-            hours_overflow: bool,
-            day_of_month: u8,
-            days_in_curr_month: u8,
-        ) -> (u8, bool) {
-            let mut found = false;
-            days.reset();
-            for day in days.one_cycle() {
-                if day >= day_of_month {
-                    found = true;
-                    break;
-                }
-            }
-            if hours_overflow {
-                days.rotate_left(1)
-            }
-            if found {
-                days.rotate_right(1);
-                let next = days.peek().unwrap();
-                if next > days_in_curr_month {
-                    days.reset();
-                    (days.peek().unwrap(), true)
-                } else {
-                    (next, false)
-                }
-            } else {
-                (days.peek().unwrap(), true)
-            }
-        }
-
-        fn next_day_of_the_week(
-            days: &mut CopyRing<u8>,
-            hours_overflow: bool,
-            day_of_week: u8,
-            day_of_month: u8,
-            days_in_curr_month: u8,
-        ) -> (u8, bool) {
-            let mut found = false;
-            days.reset();
-            for weekday in days.one_cycle() {
-                if weekday >= day_of_week {
-                    found = true;
-                    break;
-                }
-            }
-            if found {
-                days.rotate_right(1)
-            }
-            if hours_overflow {
-                days.rotate_left(1)
-            }
-            let weekday = days.peek().unwrap();
-            let days_since_now = Self::num_weekdays_since(day_of_week as i8, weekday as i8);
-            let next_day_unmodded = day_of_month + days_since_now;
-            if next_day_unmodded > days_in_curr_month {
-                (next_day_unmodded % days_in_curr_month, true)
-            } else {
-                (next_day_unmodded, false)
-            }
-        }
-
-        pub fn num_weekdays_since(first_weekday: i8, second_weekday: i8) -> u8 {
-            let days_in_a_week = 7i8;
-            let diff = days_in_a_week + second_weekday - first_weekday;
-            (diff % days_in_a_week) as u8
+        pub const fn num_weekdays_since(start_weekday: i16, end_weekday: i16) -> u8 {
+            todo!()
         }
     }
 
@@ -390,30 +112,17 @@ mod date {
     }
 
     impl Months {
-        pub fn new(copy_ring: CopyRing<u8>) -> Self {
+        pub const fn new(copy_ring: CronRing) -> Self {
             Self(copy_ring)
         }
 
-        pub fn first_after(&mut self, day_overflow: bool, month: u8) -> (u8, bool) {
-            let mut found = false;
-            let mut overflow = false;
+        pub fn first_after(&mut self, month: u8) -> (u8, bool) {
             self.0.reset();
-            for other_month in self.0.one_cycle().checked() {
-                if other_month.0 >= month {
-                    found = true;
-                    overflow = other_month.1;
-                    break;
-                }
-            }
-            if day_overflow {
-                overflow = self.0.checked_next().unwrap().1 || overflow
-            }
-            if found {
-                self.0.rotate_right(1);
-                let final_overflow = day_overflow && overflow;
-                (self.0.peek().unwrap(), final_overflow)
+            let found = self.0.until_start().find(|&our_month| our_month >= month);
+            if let Some(next) = found {
+                (next, false)
             } else {
-                (self.0.peek().unwrap(), true)
+                (self.0.next().unwrap(), true)
             }
         }
 
@@ -428,19 +137,19 @@ mod date {
 }
 
 mod time {
-    use crate::schedule::iterator::CopyRing;
+    use crate::schedule::{iterator::CopyRing, table::CronRing};
 
     #[derive(Clone, Debug)]
-    pub struct Seconds(CopyRing<u8>);
+    pub struct Seconds(CronRing);
 
     #[derive(Clone, Debug)]
-    pub struct Minutes(CopyRing<u8>);
+    pub struct Minutes(CronRing);
 
     #[derive(Clone, Debug)]
-    pub struct Hours(CopyRing<u8>);
+    pub struct Hours(CronRing);
 
     impl Seconds {
-        pub fn new(copy_ring: CopyRing<u8>) -> Self {
+        pub const fn new(copy_ring: CronRing) -> Self {
             Self(copy_ring)
         }
 
@@ -453,20 +162,13 @@ mod time {
         ///
         /// Otherwise, the bool is `false` and no overflow
         /// has occurred.
-        pub fn first_after(&mut self, secs: u8) -> (u8, bool) {
-            let mut found = false;
+        pub fn first_after(&mut self, sec: u8) -> (u8, bool) {
             self.0.reset();
-            for seconds in self.0.until_start() {
-                if seconds >= secs {
-                    found = true;
-                    break;
-                }
-            }
-            if found {
-                self.0.rotate_right(1);
-                (self.0.next().unwrap(), false)
+            let found = self.0.until_start().find(|&second| second >= sec);
+            if let Some(next) = found {
+                (next, false)
             } else {
-                (self.0.next().unwrap(), true)
+                (self.0.next().unwrap(), true) // We know that overflow occurred
             }
         }
 
@@ -481,7 +183,7 @@ mod time {
     }
 
     impl Minutes {
-        pub fn new(copy_ring: CopyRing<u8>) -> Self {
+        pub const fn new(copy_ring: CronRing) -> Self {
             Self(copy_ring)
         }
 
@@ -494,28 +196,22 @@ mod time {
         ///
         /// Otherwise, the bool is `false` and no overflow
         /// has occurred.
-        pub fn first_after(&mut self, mins: u8, secs_overflow: bool) -> (u8, bool) {
-            let mut found = false;
-            let mut overflow = false;
+        pub fn first_after(&mut self, min: u8, sec_overflow: bool) -> (u8, bool) {
             self.0.reset();
-            for minutes in self.0.one_cycle().checked() {
-                if minutes.0 >= mins {
-                    found = true;
-                    overflow = minutes.1;
-                    break;
+            let found = self.0.until_start().find(|&minute| minute >= min);
+            if let Some(next) = found {
+                if sec_overflow {
+                    self.0.checked_next().unwrap()
+                } else {
+                    (next, false)
                 }
-                eprintln!("minute: {:?} --- mins: {}", minutes, mins);
-            }
-            if secs_overflow {
-                overflow = self.0.checked_next().unwrap().1 || overflow;
-                dbg!(overflow);
-            }
-            if found {
-                self.0.rotate_right(1);
-                let final_overflow = secs_overflow && overflow;
-                (self.0.peek().unwrap(), final_overflow)
             } else {
-                (self.0.peek().unwrap(), true)
+                // We know that overflow occurred, so the next
+                // minute will be in the next hour, which will be much
+                // later than the origin time. Therefore,
+                // no need to pay attention to `sec_overflow` in
+                // this case.
+                (self.0.next().unwrap(), true)
             }
         }
 
@@ -524,8 +220,8 @@ mod time {
         /// occurred. For minutes, overflow
         /// occurs when the minutes passes 59
         /// and wraps back to 0.
-        pub fn next(&mut self, secs_overflow: bool) -> (u8, bool) {
-            if secs_overflow {
+        pub fn next(&mut self, sec_overflow: bool) -> (u8, bool) {
+            if sec_overflow {
                 self.0.checked_next().unwrap()
             } else {
                 (self.0.peek().unwrap(), false)
@@ -534,7 +230,7 @@ mod time {
     }
 
     impl Hours {
-        pub fn new(copy_ring: CopyRing<u8>) -> Self {
+        pub const fn new(copy_ring: CronRing) -> Self {
             Self(copy_ring)
         }
 
@@ -547,26 +243,17 @@ mod time {
         ///
         /// Otherwise, the bool is `false` and no overflow
         /// has occurred.
-        pub fn first_after(&mut self, hrs: u8, mins_overflow: bool) -> (u8, bool) {
-            let mut found = false;
-            let mut overflow = false;
+        pub fn first_after(&mut self, hr: u8, min_overflow: bool) -> (u8, bool) {
             self.0.reset();
-            for hour in self.0.one_cycle().checked() {
-                if hour.0 >= hrs {
-                    found = true;
-                    overflow = hour.1;
-                    break;
+            let found = self.0.until_start().find(|&hour| hour >= hr);
+            if let Some(next) = found {
+                if min_overflow {
+                    self.0.checked_next().unwrap()
+                } else {
+                    (next, false)
                 }
-            }
-            if mins_overflow {
-                overflow = self.0.checked_next().unwrap().1 || overflow
-            }
-            if found {
-                self.0.rotate_right(1);
-                let final_overflow = mins_overflow && overflow;
-                (self.0.peek().unwrap(), final_overflow)
             } else {
-                (self.0.peek().unwrap(), true)
+                (self.0.next().unwrap(), true)
             }
         }
 
@@ -575,11 +262,118 @@ mod time {
         /// occurred. For hours, overflow
         /// occurs when the hours passes 23
         /// and wraps back to 0.
-        pub fn next(&mut self, mins_overflow: bool) -> (u8, bool) {
-            if mins_overflow {
+        pub fn next(&mut self, min_overflow: bool) -> (u8, bool) {
+            if min_overflow {
                 self.0.checked_next().unwrap()
             } else {
                 (self.0.peek().unwrap(), false)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::{Hours, Minutes, Seconds};
+        use crate::schedule::iterator::CopyRing;
+        use chrono::{Timelike, Utc};
+        use rand::Rng;
+
+        const THRESHOLD: i32 = 50;
+        const UPPER: i32 = 100;
+
+        fn gen_range_mins_or_secs() -> Vec<u8> {
+            let mut v = vec![];
+            let mut rng = rand::thread_rng();
+            for i in 0u8..60 {
+                if rng.gen::<i32>() % UPPER > THRESHOLD {
+                    v.push(i)
+                }
+            }
+            if v.is_empty() {
+                v.push(rng.gen::<u8>() % 60)
+            }
+            v
+        }
+
+        fn gen_range_hours() -> Vec<u8> {
+            let mut v = vec![];
+            let mut rng = rand::thread_rng();
+            for i in 0u8..24 {
+                if rng.gen::<i32>() % UPPER > THRESHOLD {
+                    v.push(i)
+                }
+            }
+            if v.is_empty() {
+                v.push(rng.gen::<u8>() % 24)
+            }
+            v
+        }
+
+        #[test]
+        fn first_after_works_for_secs() {
+            let mut seconds = Seconds::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
+            let now = Utc::now();
+
+            let next = seconds.first_after(now.second() as u8);
+            match next.1 {
+                true => assert!((next.0 as u32) < now.second()),
+                false => assert!((next.0 as u32) >= now.second()),
+            }
+        }
+
+        #[test]
+        fn next_for_seconds() {
+            let mut secs = Seconds::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
+            let mut rng = rand::thread_rng();
+            let s = rng.gen::<u8>() % 60;
+            let first = secs.first_after(s);
+            eprintln!("First after {} seconds: {:?}", s, first);
+            dbg!(secs.next());
+        }
+
+        #[test]
+        fn first_after_works_for_mins_no_overflow() {
+            let mut minutes = Minutes::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
+            let now = Utc::now();
+
+            let next = minutes.first_after(now.minute() as u8, false);
+            match next.1 {
+                true => assert!((next.0 as u32) < now.minute()),
+                false => assert!((next.0 as u32) >= now.minute()),
+            }
+        }
+
+        #[test]
+        fn first_after_works_for_mins_overflow() {
+            let mut minutes = Minutes::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
+            for i in 0..60 {
+                let now2 = i;
+
+                let next = minutes.first_after(now2, true);
+                //eprintln!("now: {} minutes", now2);
+                //dbg!(next);
+                //dbg!(&minutes);
+                match next.1 {
+                    true => assert!((next.0) < now2),
+                    false => assert!((next.0) >= now2),
+                }
+            }
+        }
+
+        #[test]
+        fn first_after_works_for_hours_overflow() {
+            let mut hours = Hours::new(CopyRing::arc_with_size(gen_range_hours().into()));
+            for i in 0..24 {
+                let now2 = i;
+
+                let next = hours.first_after(now2, true);
+                //eprintln!("now: {} hours", now2);
+                //dbg!(next);
+                //dbg!(&hours);
+                match next.1 {
+                    true => assert!((next.0) < now2),
+                    false => assert!((next.0) >= now2),
+                }
             }
         }
     }
@@ -596,7 +390,7 @@ pub struct Time {
 pub struct Date {
     days: Days,
     months: Months,
-    year: u32,
+    year: Option<u32>,
     cache: Cache,
 }
 
@@ -609,69 +403,194 @@ struct Cache {
 
 #[derive(Default, Debug)]
 pub struct TimeBuilder {
-    secs: Option<CopyRing<u8>>,
-    mins: Option<CopyRing<u8>>,
-    hours: Option<CopyRing<u8>>,
+    secs: Option<CronRing>,
+    mins: Option<CronRing>,
+    hours: Option<CronRing>,
 }
 
 #[derive(Default, Debug)]
 pub struct DateBuilder {
-    days_of_the_week: Option<CopyRing<u8>>,
-    days_of_the_month: Option<CopyRing<u8>>,
-    months: Option<CopyRing<u8>>,
-    year: Option<u32>,
+    days_week: Option<CronRing>,
+    days_month: Option<CronRing>,
+    months: Option<CronRing>,
 }
 
 impl Date {
+    pub fn first_after(
+        &mut self,
+        time_overflow: bool,
+        mut days_month: u8,
+        mut days_week: u8,
+        months: u8,
+        year: u32,
+    ) -> Option<NaiveDate> {
+        // Check for next day, only until the overflow occurs
+        // (or until day is found).
+        //
+        //     Move both days and weeks with
+        //     `CopyRing::until_start()` iter, keeping
+        //     track of the current value outside the
+        //     loop.
+        //
+        //     If not found for either type of day, then
+        //     advance the month to the next month and repeat
+        //     first loop.
+        //
+        //         If the month overflowed, increment years by 1.
+        //         After advancing the month, recalcuate the
+        //         given weekday so that on the next run, the
+        //         weekday ring only has to find the
+        //         first weekday after the first day of the new
+        //         month.
+        //
+        //     If one type found the next day, then check if
+        //     that day is actually in the current month.
+        //
+        //         If not, then reset that type, advance the month
+        //         to the next month, then check if the other
+        //         type is valid.
+        //
+        //             If the month overflowed, increment years by 1.
+        //
+        //
+
+        // Step 1: Set the months to the first available month
+        let (month, year_overflow) = self.months.first_after(months);
+        self.year = Some(year + year_overflow as u32);
+
+        // Step 2: If the next month and year are not equal to the given values, then
+        //         Set days_month to 1, and calculate the days_week from the
+        //         `month`/`days_month`/`self.year` value.
+        if month != months || self.year.unwrap() != year {
+            let first_of_the_month = 1;
+            days_week = Self::calculate_weekday_from(
+                months,
+                year,
+                days_week,
+                days_month,
+                month,
+                self.year.unwrap(),
+                first_of_the_month,
+            );
+            days_month = first_of_the_month;
+        }
+
+        // Step 3: Find the next available day for each type.
+        //         The result will be based on which types the
+        //         Days struct has.
+        self.days.reset();
+        let maybe_next = match &mut self.days {
+            Days::Both {
+                month,
+                week: (week, _),
+            } => date::NextDay::Both {
+                week: week
+                    .until_start()
+                    .find(|&day| day >= days_week)
+                    .or_else(|| week.next())
+                    .unwrap(),
+                month: month.until_start().find(|&day| day >= days_month),
+            },
+            Days::Month(month) => {
+                date::NextDay::Month(month.until_start().find(|&day| day >= days_month))
+            }
+            Days::Week((week, _)) => date::NextDay::Week(
+                week.until_start()
+                    .find(|&day| day >= days_week)
+                    .or_else(|| week.next())
+                    .unwrap(),
+            ),
+        };
+
+        match maybe_next {
+            date::NextDay::Week(week) => {
+                // Calculate the day of the month from this weekday.
+
+                todo!()
+            }
+            date::NextDay::Both { week, month } => todo!(),
+            date::NextDay::Month(month) => todo!(),
+        }
+
+        todo!()
+    }
+
+    pub fn next(&mut self) -> Option<NaiveDate> {
+        todo!()
+    }
+
+    const fn calculate_weekday_from(
+        start_month: u8,
+        start_year: u32,
+        start_weekday: u8,
+        start_monthday: u8,
+        later_month: u8,
+        later_year: u32,
+        later_monthday: u8,
+    ) -> u8 {
+        todo!()
+    }
+
     pub fn builder() -> DateBuilder {
         Default::default()
     }
 }
 
 impl Time {
+    pub fn first_after(&mut self, sec: u8, min: u8, hour: u8) -> Option<(NaiveTime, bool)> {
+        let (sec, overflow) = self.secs.first_after(sec);
+        let (min, overflow) = self.mins.first_after(min, overflow);
+        let (hour, overflow) = self.hours.first_after(hour, overflow);
+        let time = NaiveTime::from_hms_opt(hour as u32, min as u32, sec as u32)?;
+        Some((time, overflow))
+    }
+
+    pub fn next(&mut self) -> Option<(NaiveTime, bool)> {
+        let (sec, overflow) = self.secs.next();
+        let (min, overflow) = self.mins.next(overflow);
+        let (hour, overflow) = self.hours.next(overflow);
+        let time = NaiveTime::from_hms_opt(hour as u32, min as u32, sec as u32)?;
+        Some((time, overflow))
+    }
+
     pub fn builder() -> TimeBuilder {
         Default::default()
     }
 }
 
 impl DateBuilder {
-    pub fn with_weekdays(&mut self, weekdays: impl Into<CopyRing<u8>>) -> &mut Self {
-        self.days_of_the_week = Some(weekdays.into());
+    pub fn with_days_week(&mut self, weekdays: CronRing) -> &mut Self {
+        self.days_week = Some(weekdays);
         self
     }
 
-    pub fn with_weekdays_iter(&mut self, weekdays: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.days_of_the_week = Some(CopyRing::from_iter(weekdays));
+    pub fn with_days_week_iter(&mut self, weekdays: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.days_week = Some(CopyRing::arc_with_size(weekdays.into_iter().collect()));
         self
     }
 
-    pub fn with_month_days(&mut self, month_days: impl Into<CopyRing<u8>>) -> &mut Self {
-        self.days_of_the_month = Some(month_days.into());
+    pub fn with_days_month(&mut self, month_days: CronRing) -> &mut Self {
+        self.days_month = Some(month_days);
         self
     }
 
-    pub fn with_month_days_iter(&mut self, month_days: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.days_of_the_month = Some(CopyRing::from_iter(month_days));
+    pub fn with_days_month_iter(&mut self, month_days: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.days_month = Some(CopyRing::arc_with_size(month_days.into_iter().collect()));
         self
     }
 
     pub fn with_months_iter(&mut self, months: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.months = Some(CopyRing::from_iter(months));
+        self.months = Some(CopyRing::arc_with_size(months.into_iter().collect()));
         self
     }
 
-    pub fn with_months(&mut self, months: impl Into<CopyRing<u8>>) -> &mut Self {
-        self.months = Some(months.into());
-        self
-    }
-
-    pub fn with_year(&mut self, year: u32) -> &mut Self {
-        self.year = Some(year);
+    pub fn with_months(&mut self, months: CronRing) -> &mut Self {
+        self.months = Some(months);
         self
     }
 
     pub fn build(&mut self) -> Result<Date, Error> {
-        let days = match (self.days_of_the_month.take(), self.days_of_the_week.take()) {
+        let days = match (self.days_month.take(), self.days_week.take()) {
             (None, None) => return Err(Error::MissingField),
             (None, Some(week)) => Days::Week((week, DayCache::default())),
             (Some(month), None) => Days::Month(month),
@@ -681,7 +600,6 @@ impl DateBuilder {
             },
         };
         let months = self.months.take().ok_or(Error::MissingField)?;
-        let year = self.year.take().ok_or(Error::MissingField)?;
 
         if months.is_empty()
             || match &days {
@@ -717,7 +635,7 @@ impl DateBuilder {
         Ok(Date {
             days,
             months: Months::new(months),
-            year,
+            year: None,
             cache: Default::default(),
         })
     }
@@ -725,32 +643,32 @@ impl DateBuilder {
 
 impl TimeBuilder {
     pub fn with_secs_iter(&mut self, secs: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.secs = Some(CopyRing::from_iter(secs));
+        self.secs = Some(CopyRing::arc_with_size(secs.into_iter().collect()));
         self
     }
 
-    pub fn with_secs(&mut self, secs: impl Into<CopyRing<u8>>) -> &mut Self {
-        self.secs = Some(secs.into());
+    pub fn with_secs(&mut self, secs: CronRing) -> &mut Self {
+        self.secs = Some(secs);
         self
     }
 
     pub fn with_mins_iter(&mut self, mins: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.mins = Some(CopyRing::from_iter(mins));
+        self.mins = Some(CopyRing::arc_with_size(mins.into_iter().collect()));
         self
     }
 
-    pub fn with_mins(&mut self, mins: impl Into<CopyRing<u8>>) -> &mut Self {
-        self.mins = Some(mins.into());
+    pub fn with_mins(&mut self, mins: CronRing) -> &mut Self {
+        self.mins = Some(mins);
         self
     }
 
     pub fn with_hours_iter(&mut self, hours: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.hours = Some(CopyRing::from_iter(hours));
+        self.hours = Some(CopyRing::arc_with_size(hours.into_iter().collect()));
         self
     }
 
-    pub fn with_hours(&mut self, hours: impl Into<CopyRing<u8>>) -> &mut Self {
-        self.hours = Some(hours.into());
+    pub fn with_hours(&mut self, hours: CronRing) -> &mut Self {
+        self.hours = Some(hours);
         self
     }
 

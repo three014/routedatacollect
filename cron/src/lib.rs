@@ -1,3 +1,5 @@
+pub use schedule::Schedule;
+
 #[derive(Debug, Clone, Copy)]
 pub enum Error {
     Empty,
@@ -6,17 +8,17 @@ pub enum Error {
     Unknown,
 }
 
-pub mod schedule {
+mod schedule {
     use self::{
+        iterator::{CopyRing, OwnedScheduleIter, ScheduleIter},
         table::FieldTable,
-        iterator::{OwnedScheduleIter, ScheduleIter},
     };
     use crate::Error;
-    use chrono::{DateTime, Datelike, TimeZone, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
     use std::str::FromStr;
 
-    mod table;
     mod iterator;
+    mod table;
 
     #[derive(Clone, Debug)]
     pub struct Schedule {
@@ -32,7 +34,7 @@ pub mod schedule {
             ScheduleIter::new(self, first)
         }
 
-        fn recalibrate<Tz: TimeZone + Clone + 'static>(&mut self, tz: &Tz) -> Option<DateTime<Tz>> {
+        fn recalibrate<Tz: TimeZone + 'static>(&mut self, tz: &Tz) -> Option<DateTime<Tz>> {
             let first = self.fields.after(&Utc::now().with_timezone(tz));
             first.and_then(|dt| dt.and_local_timezone(tz.clone()).earliest())
         }
@@ -45,15 +47,36 @@ pub mod schedule {
             OwnedScheduleIter::new(self, first)
         }
 
-        fn next<Tz: TimeZone + 'static>(
-            &mut self,
-            datetime: &DateTime<Tz>,
-        ) -> Option<DateTime<Tz>> {
-            let month = datetime.month() as u8;
-            let year = datetime.year() as u32;
+        fn next<Tz: TimeZone + 'static>(&mut self, tz: &Tz) -> Option<DateTime<Tz>> {
             self.fields
-                .next(month, year)
-                .and_then(|dt| dt.and_local_timezone(datetime.timezone()).earliest())
+                .next()
+                .and_then(|dt| dt.and_local_timezone(tz.clone()).earliest())
+        }
+
+        fn new(fields: FieldTable) -> Self {
+            Self {
+                fields: Box::new(fields),
+            }
+        }
+
+        pub fn hourly() -> Self {
+            Self::new(hourly())
+        }
+
+        pub fn daily() -> Self {
+            Self::new(daily())
+        }
+
+        pub fn weekly() -> Self {
+            Self::new(weekly())
+        }
+
+        pub fn monthly() -> Self {
+            Self::new(monthly())
+        }
+
+        pub fn yearly() -> Self {
+            Self::new(annually())
         }
     }
 
@@ -71,21 +94,11 @@ pub mod schedule {
                         .ok_or(Error::Unknown)?
                         .eq(&'@')
                         .then(|| match maybe_macro.next().ok_or(Error::InvalidMacro)? {
-                            'y' | 'a' => Ok(Schedule {
-                                fields: Box::new(annually())
-                            }),
-                            'm' => Ok(Schedule {
-                                fields: Box::new(monthly())
-                            }),
-                            'w' => Ok(Schedule {
-                                fields: Box::new(weekly())
-                            }),
-                            'd' => Ok(Schedule {
-                                fields: Box::new(daily())
-                            }),
-                            'h' => Ok(Schedule {
-                                fields: Box::new(hourly())
-                            }),
+                            'y' | 'a' => Ok(Schedule::yearly()),
+                            'm' => Ok(Schedule::monthly()),
+                            'w' => Ok(Schedule::weekly()),
+                            'd' => Ok(Schedule::daily()),
+                            'h' => Ok(Schedule::hourly()),
                             _ => Err(Error::InvalidMacro),
                         })
                         .unwrap_or(Err(Error::WrongNumberOfFields))
@@ -99,57 +112,29 @@ pub mod schedule {
 
     fn hourly() -> FieldTable {
         FieldTable::builder()
-            .with_secs(0)
-            .with_mins(0)
-            .with_hrs_iter(0..24)
-            .with_days_of_the_month_only_iter(1..=31)
+            .with_secs(CopyRing::from(0))
+            .with_mins(CopyRing::from(0))
+            .with_hours_iter(0..24)
+            .with_days_month_iter(1..=31)
             .with_months_iter(1..=12)
             .build()
             .unwrap()
     }
 
     fn daily() -> FieldTable {
-        FieldTable::builder()
-            .with_secs(0)
-            .with_mins(0)
-            .with_hrs(0)
-            .with_days_of_the_month_only_iter(1..=31)
-            .with_months_iter(1..=12)
-            .build()
-            .unwrap()
+        todo!()
     }
 
     fn weekly() -> FieldTable {
-        FieldTable::builder()
-            .with_secs(0)
-            .with_mins(0)
-            .with_hrs(0)
-            .with_days_of_the_week_only(0)
-            .with_months_iter(1..=12)
-            .build()
-            .unwrap()
+        todo!()
     }
 
     fn annually() -> FieldTable {
-        FieldTable::builder()
-            .with_secs(0)
-            .with_mins(0)
-            .with_hrs(0)
-            .with_days_of_the_month_only(1)
-            .with_months(1)
-            .build()
-            .unwrap()
+        todo!()
     }
 
     fn monthly() -> FieldTable {
-        FieldTable::builder()
-            .with_secs(0)
-            .with_mins(0)
-            .with_hrs(0)
-            .with_days_of_the_month_only(1)
-            .with_months_iter(1..=12)
-            .build()
-            .unwrap()
+        todo!()
     }
 
     #[cfg(test)]

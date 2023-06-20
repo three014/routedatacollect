@@ -1,6 +1,9 @@
 use chrono::{DateTime, NaiveDateTime, TimeZone};
+use self::fields::{Date, DateBuilder, Time, TimeBuilder};
+use super::iterator::CopyRing;
 
-use self::fields::{DateBuilder, TimeBuilder};
+pub type CronRing = CopyRing<'static, u8, 1>;
+
 
 #[derive(Clone, Copy, Debug)]
 pub enum Error {
@@ -31,6 +34,7 @@ pub struct BuildError {
     time: Option<Error>,
     date: Option<Error>,
 }
+
 impl std::fmt::Display for BuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (self.time, self.date) {
@@ -42,12 +46,13 @@ impl std::fmt::Display for BuildError {
     }
 }
 
-pub trait FieldTableBuilder {}
-
 mod fields;
 
 #[derive(Clone, Debug)]
-pub struct FieldTable {}
+pub struct FieldTable {
+    time: Time,
+    date: Date,
+}
 
 /// A builder pattern for the `FieldTable`.
 /// To build a `FieldTable`, supply the builder
@@ -90,8 +95,84 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn build(&mut self) -> Result<FieldTable, [Option<Error>; 2]> {
-        todo!()
+    pub fn with_secs_iter(&mut self, secs: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.time.with_secs_iter(secs);
+        self
+    }
+
+    pub fn with_secs(&mut self, secs: CronRing) -> &mut Self {
+        self.time.with_secs(secs);
+        self
+    }
+
+    pub fn with_mins_iter(&mut self, mins: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.time.with_mins_iter(mins);
+        self
+    }
+
+    pub fn with_mins(&mut self, mins: CronRing) -> &mut Self {
+        self.time.with_mins(mins);
+        self
+    }
+
+    pub fn with_hours_iter(&mut self, hours: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.time.with_hours_iter(hours);
+        self
+    }
+
+    pub fn with_hours(&mut self, hours: CronRing) -> &mut Self {
+        self.time.with_hours(hours);
+        self
+    }
+
+    pub fn with_days_week(&mut self, weekdays: CronRing) -> &mut Self {
+        self.date.with_days_week(weekdays);
+        self
+    }
+
+    pub fn with_days_week_iter(&mut self, weekdays: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.date.with_days_week_iter(weekdays);
+        self
+    }
+
+    pub fn with_days_month(&mut self, month_days: CronRing) -> &mut Self {
+        self.date.with_days_month(month_days);
+        self
+    }
+
+    pub fn with_days_month_iter(&mut self, month_days: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.date.with_days_month_iter(month_days);
+        self
+    }
+
+    pub fn with_months_iter(&mut self, months: impl IntoIterator<Item = u8>) -> &mut Self {
+        self.date.with_months_iter(months);
+        self
+    }
+
+    pub fn with_months(&mut self, months: CronRing) -> &mut Self {
+        self.date.with_months(months);
+        self
+    }
+
+    pub fn build(&mut self) -> Result<FieldTable, BuildError> {
+        let time = self.time.build();
+        let date = self.date.build();
+        match (time, date) {
+            (Ok(time), Ok(date)) => Ok(FieldTable { time, date }),
+            (Ok(_), Err(d)) => Err(BuildError {
+                time: None,
+                date: Some(d),
+            }),
+            (Err(t), Ok(_)) => Err(BuildError {
+                time: Some(t),
+                date: None,
+            }),
+            (Err(t), Err(d)) => Err(BuildError {
+                time: Some(t),
+                date: Some(d),
+            }),
+        }
     }
 }
 
@@ -118,7 +199,7 @@ impl FieldTable {
         todo!()
     }
 
-    pub fn next(&mut self, curr_month: u8, curr_year: u32) -> Option<NaiveDateTime> {
+    pub fn next(&mut self) -> Option<NaiveDateTime> {
         // let (sec, overflow) = self.secs.next();
         // let (min, overflow) = self.mins.next(overflow);
         // let (hour, overflow) = self.hours.next(overflow);

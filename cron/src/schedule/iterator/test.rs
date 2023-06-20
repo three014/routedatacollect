@@ -22,7 +22,7 @@ fn one_cycle_fn_equals_origin_vec() {
 
 #[test]
 fn checked_next_only_true_when_wrap_occurs() {
-    let mut ring = CopyRing::from_iter(0..3);
+    let mut ring = CopyRing::arc((0..3).collect());
     assert!(!ring.is_init());
 
     let next = ring.checked_next().unwrap();
@@ -40,14 +40,14 @@ fn checked_next_only_true_when_wrap_occurs() {
 
 #[test]
 fn first_next_equals_first_value() {
-    let mut ring = CopyRing::from(vec![2, 5, 7, 8]);
+    let mut ring = CopyRing::owned([2, 5, 7, 8]);
     assert_eq!(2, ring.next().unwrap())
 }
 
 #[test]
 fn shifted_ring_equals_shifted_vec() {
     let mut left = VecDeque::from([3, 2, 63, 7, 4]);
-    let mut right = CopyRing::from_iter(left.clone());
+    let mut right = CopyRing::from(left.clone());
 
     left.rotate_left(3);
     right.next();
@@ -71,7 +71,7 @@ fn next_equals_prev() {
 #[test]
 fn prev_equals_last_item_in_vec() {
     let left = [2, 4, 6, 8];
-    let mut right = CopyRing::from_iter(left.clone());
+    let mut right = CopyRing::borrowed(&left);
 
     assert_eq!(*left.last().unwrap(), right.prev().unwrap());
 }
@@ -79,7 +79,7 @@ fn prev_equals_last_item_in_vec() {
 #[test]
 fn first_cycle_equals_origin_iter() {
     let left = 0..100;
-    let mut right = CopyRing::from_iter(left.clone());
+    let mut right = CopyRing::arc(left.clone().collect());
 
     for (l, r) in left.zip(right.take_mut(1000)) {
         assert_eq!(l, r)
@@ -88,7 +88,7 @@ fn first_cycle_equals_origin_iter() {
 
 #[test]
 fn rotate_right_works() {
-    let mut ring = CopyRing::from_iter(0..8);
+    let mut ring = CopyRing::arc((0..8).collect());
 
     ring.rotate_right(3);
     assert_eq!(5, ring.index);
@@ -114,7 +114,7 @@ fn single_item_loops_forever() {
 
 #[test]
 fn zero_items_returns_none() {
-    let mut ring: CopyRing<i32> = CopyRing::from(vec![]);
+    let mut ring: CopyRing<i32, 0> = CopyRing::from(vec![]);
 
     assert!(ring.next().is_none())
 }
