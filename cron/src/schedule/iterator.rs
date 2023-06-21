@@ -1,6 +1,6 @@
 use super::Schedule;
 use chrono::{DateTime, TimeZone};
-use std::{collections::VecDeque, fmt::Debug, ops::Deref, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 pub struct ScheduleIter<'a, Tz: TimeZone> {
     schedule: &'a mut Schedule,
@@ -83,7 +83,7 @@ where
 {
     index: usize,
     collection: Container<'a, T, N>,
-    init: bool,
+    init: bool
 }
 
 impl<T: Copy, const N: usize> CopyRing<'static, T, N> {
@@ -127,15 +127,15 @@ where
         Self {
             index: 0,
             init: false,
-            collection: Container::Arc(collection)
+            collection: Container::Arc(collection),
         }
     }
 
-    pub fn borrowed_with_size(collection: &'a [T]) -> Self {
+    pub const fn borrowed_with_size(collection: &'a [T]) -> Self {
         Self {
             index: 0,
             init: false,
-            collection: Container::Ref(collection)
+            collection: Container::Ref(collection),
         }
     }
 
@@ -249,7 +249,7 @@ where
     /// iteration.
     ///
     /// If you'd like to iterate through the ring
-    /// without mutating the ring, use `take` instead.
+    /// without mutating the ring, use `take_ref` instead.
     pub fn take_mut(&mut self, n: usize) -> CycleIterMut<'a, '_, T, N> {
         CycleIterMut { ring: self, n }
     }
@@ -257,7 +257,7 @@ where
     /// Takes the first n elements of the ring
     /// and iterates through it just like `take_mut`
     /// without mutating the ring itself.
-    pub fn take(&self, n: usize) -> impl ExactSizeIterator<Item = T> + '_ {
+    pub fn take_ref(&self, n: usize) -> impl ExactSizeIterator<Item = T> + '_ {
         CycleIter {
             ring_buf: &self.collection,
             index: self.index,
@@ -300,7 +300,7 @@ impl<'a: 'b, 'b, T: Copy, const N: usize> CycleIterMut<'a, 'b, T, N> {
     }
 }
 
-impl<'a, T: Copy> Iterator for CycleIter<'a, T> {
+impl<T: Copy> Iterator for CycleIter<'_, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -318,8 +318,21 @@ impl<'a, T: Copy> Iterator for CycleIter<'a, T> {
         (self.n, Some(self.n))
     }
 }
+impl<T: Copy> ExactSizeIterator for CycleIter<'_, T> {}
 
-impl<'a, T: Copy> ExactSizeIterator for CycleIter<'a, T> {}
+pub struct Checked<'a: 'b, 'b, T: Copy, const N: usize>(CycleIterMut<'a, 'b, T, N>);
+impl<T: Copy, const N: usize> Iterator for Checked<'_, '_, T, N> {
+    type Item = (T, bool);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.checked_next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+impl<T: Copy, const N: usize> ExactSizeIterator for Checked<'_, '_, T, N> {}
 
 impl<T: Copy, const N: usize> Iterator for CycleIterMut<'_, '_, T, N> {
     type Item = T;
@@ -337,33 +350,11 @@ impl<T: Copy, const N: usize> Iterator for CycleIterMut<'_, '_, T, N> {
         (self.n, Some(self.n))
     }
 }
-
 impl<T: Copy, const N: usize> ExactSizeIterator for CycleIterMut<'_, '_, T, N> {}
-
-pub struct Checked<'a: 'b, 'b, T: Copy, const N: usize>(CycleIterMut<'a, 'b, T, N>);
-
-impl<'a: 'b, 'b, T: Copy, const N: usize> Iterator for Checked<'a, 'b, T, N> {
-    type Item = (T, bool);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.checked_next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
-    }
-}
-impl<T: Copy, const N: usize> ExactSizeIterator for Checked<'_, '_, T, N> {}
 
 impl<T: Copy> From<Vec<T>> for CopyRing<'static, T, 0> {
     fn from(value: Vec<T>) -> Self {
         Self::arc(Arc::from(value))
-    }
-}
-
-impl<T: Copy> From<VecDeque<T>> for CopyRing<'static, T, 0> {
-    fn from(value: VecDeque<T>) -> Self {
-        Self::arc(value.into_iter().collect())
     }
 }
 
@@ -382,6 +373,12 @@ impl<T: Copy> From<T> for CopyRing<'static, T, 1> {
 impl<T: Copy> From<Box<[T]>> for CopyRing<'static, T, 0> {
     fn from(value: Box<[T]>) -> Self {
         Self::arc(Arc::from(value))
+    }
+}
+
+impl<T: Copy> FromIterator<T> for CopyRing<'static, T, 0> {
+    fn from_iter<A: IntoIterator<Item = T>>(iter: A) -> Self {
+        Self::arc(iter.into_iter().collect())
     }
 }
 

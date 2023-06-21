@@ -1,9 +1,8 @@
-use chrono::{DateTime, NaiveDateTime, TimeZone};
 use self::fields::{Date, DateBuilder, Time, TimeBuilder};
 use super::iterator::CopyRing;
+use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Timelike};
 
 pub type CronRing = CopyRing<'static, u8, 1>;
-
 
 #[derive(Clone, Copy, Debug)]
 pub enum Error {
@@ -181,22 +180,22 @@ impl FieldTable {
         &mut self,
         date_time: &DateTime<Tz>,
     ) -> Option<NaiveDateTime> {
-        // let (sec, overflow) = self.secs.first_after(date_time.second() as u8);
-        // let (min, overflow) = self.mins.first_after(date_time.minute() as u8, overflow);
-        // let (hour, overflow) = self.hours.first_after(date_time.hour() as u8, overflow);
-        // let (day, overflow) = self.days.first_after(
-        //     date_time.day() as u8,
-        //     date_time.weekday().num_days_from_sunday() as u8,
-        //     overflow,
-        //     date_time.month() as u8,
-        //     date_time.year() as u32,
-        // );
-        // let (month, overflow) = self.months.first_after(overflow, date_time.month() as u8);
-        // let year = date_time.year() + overflow as i32;
-        //
+        let (time, overflow) = self.time.first_after(
+            date_time.second() as u8,
+            date_time.minute() as u8,
+            date_time.hour() as u8,
+        )?;
+        let date = self.date.first_after(
+            overflow,
+            date_time.day() as u8,
+            date_time.weekday().num_days_from_sunday() as u8,
+            date_time.month() as u8,
+            date_time.year() as u32,
+        )?;
+
+        Some(date.and_time(time))
         // NaiveDate::from_ymd_opt(year, month as u32, day as u32)
         //     .and_then(|date| date.and_hms_opt(hour as u32, min as u32, sec as u32))
-        todo!()
     }
 
     pub fn next(&mut self) -> Option<NaiveDateTime> {

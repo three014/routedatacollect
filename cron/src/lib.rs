@@ -1,4 +1,5 @@
 pub use schedule::Schedule;
+pub use schedule::CopyRing;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Error {
@@ -8,14 +9,36 @@ pub enum Error {
     Unknown,
 }
 
+static DEFAULT_SECONDS: [u8; 60] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+];
+static DEFAULT_MINUTES: [u8; 60] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+];
+static DEFAULT_HOURS: [u8; 24] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+];
+static DEFAULT_DAYS_WEEK: [u8; 7] = [0, 1, 2, 3, 4, 5, 6];
+static DEFAULT_DAYS_MONTH: [u8; 31] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    27, 28, 29, 30, 31,
+];
+static DEFAULT_MONTHS: [u8; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const MONTH_TO_DAYS_NO_LEAP: [u8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
 mod schedule {
     use self::{
-        iterator::{CopyRing, OwnedScheduleIter, ScheduleIter},
+        iterator::{OwnedScheduleIter, ScheduleIter},
         table::FieldTable,
     };
-    use crate::Error;
+    use crate::{Error, DEFAULT_DAYS_MONTH, DEFAULT_HOURS, DEFAULT_MONTHS};
     use chrono::{DateTime, TimeZone, Utc};
     use std::str::FromStr;
+    pub use iterator::CopyRing;
 
     mod iterator;
     mod table;
@@ -114,19 +137,33 @@ mod schedule {
         FieldTable::builder()
             .with_secs(CopyRing::from(0))
             .with_mins(CopyRing::from(0))
-            .with_hours_iter(0..24)
-            .with_days_month_iter(1..=31)
-            .with_months_iter(1..=12)
+            .with_hours(CopyRing::borrowed_with_size(&DEFAULT_HOURS))
+            .with_days_month(CopyRing::borrowed_with_size(&DEFAULT_DAYS_MONTH))
+            .with_months(CopyRing::borrowed_with_size(&DEFAULT_MONTHS))
             .build()
             .unwrap()
     }
 
     fn daily() -> FieldTable {
-        todo!()
+        FieldTable::builder()
+            .with_secs(CopyRing::from(0))
+            .with_mins(CopyRing::from(0))
+            .with_hours(CopyRing::from(0))
+            .with_days_month(CopyRing::borrowed_with_size(&DEFAULT_DAYS_MONTH))
+            .with_months(CopyRing::borrowed_with_size(&DEFAULT_MONTHS))
+            .build()
+            .unwrap()
     }
 
     fn weekly() -> FieldTable {
-        todo!()
+        FieldTable::builder()
+            .with_secs(CopyRing::from(0))
+            .with_mins(CopyRing::from(0))
+            .with_hours(CopyRing::from(0))
+            .with_days_week(CopyRing::from(0))
+            .with_months(CopyRing::borrowed_with_size(&DEFAULT_MONTHS))
+            .build()
+            .unwrap()
     }
 
     fn annually() -> FieldTable {
@@ -138,27 +175,32 @@ mod schedule {
     }
 
     #[cfg(test)]
-    mod tests {}
-}
+    mod tests {
+        use crate::Schedule;
+        use chrono::Utc;
+        use std::{
+            sync::{Arc, Mutex},
+            thread,
+        };
 
-fn days_in_a_month(month: u8, year: u32) -> u8 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if is_leap_year(year) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => {
-            panic!("Number has to be from 1 - 12, corresponding to the months of the year.")
+        fn foo() {
+            let mut _s = Arc::new(Mutex::new(Schedule::hourly()));
+            let _j = thread::spawn(move || {
+                let mut lock = _s.lock().unwrap();
+                let _iter = lock.iter_with_timezone(Utc);
+            });
         }
     }
 }
 
-fn is_leap_year(year: u32) -> bool {
+const fn days_in_a_month(month: u8, year: u32) -> u8 {
+    assert!(month >= 1 && month <= 12, "Number has to be from 1 - 12, corresponding to the months of the year.");
+    let month_to_days_with_leap: [u8; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let converter = [MONTH_TO_DAYS_NO_LEAP, month_to_days_with_leap];
+    converter[is_leap_year(year) as usize][month as usize - 1]
+}
+
+const fn is_leap_year(year: u32) -> bool {
     if year % 4 == 0 {
         if year % 100 == 0 {
             year % 400 == 0

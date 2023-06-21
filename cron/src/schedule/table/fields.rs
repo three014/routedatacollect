@@ -2,12 +2,12 @@ use self::{
     date::{DayCache, Days, Months},
     time::{Hours, Minutes, Seconds},
 };
-use super::{Error, CronRing};
+use super::{CronRing, Error};
 use crate::schedule::iterator::CopyRing;
 use chrono::{NaiveDate, NaiveTime};
 
 mod date {
-    use crate::schedule::{iterator::CopyRing, table::CronRing};
+    use crate::schedule::table::CronRing;
 
     #[derive(Clone, Debug)]
     pub enum Days {
@@ -91,24 +91,12 @@ mod date {
         pub const fn num_weekdays_since(start_weekday: i16, end_weekday: i16) -> u8 {
             todo!()
         }
-    }
 
-    /// # Currently doesn't work
-    ///
-    /// Works if the next day is from the next month,
-    /// but fails if the next day is in the previous month.
-    ///
-    /// Even worse, this function doesn't factor in
-    /// what happens if the next day is more than one month
-    /// away.
-    pub(crate) fn next_weekday_from_last(
-        last_weekday: u8,
-        next_day_month: u8,
-        days_in_curr_month: u8,
-        last_day_of_month: u8,
-    ) -> u8 {
-        let days_in_a_week = 7;
-        (last_weekday + (next_day_month + days_in_curr_month - last_day_of_month)) % days_in_a_week
+        pub const fn next_weekday_from_last(first_weekday: u32, num_days_to_advance: u32) -> u8 {
+            let days_in_a_week = 7;
+            let result = (first_weekday + num_days_to_advance) % days_in_a_week;
+            result as u8
+        }
     }
 
     impl Months {
@@ -134,10 +122,30 @@ mod date {
             }
         }
     }
+
+    #[cfg(test)]
+    mod test {
+        use crate::schedule::table::fields::date::Days;
+
+        #[test]
+        fn next_weekday_from_last_works() {
+            let start = 0;
+            let n = 7;
+            assert_eq!(0, Days::next_weekday_from_last(start, n));
+
+            let start = 1;
+            let n = 13;
+            assert_eq!(0, Days::next_weekday_from_last(start, n));
+
+            let start = 5;
+            let n = 0;
+            assert_eq!(5, Days::next_weekday_from_last(start, n));
+        }
+    }
 }
 
 mod time {
-    use crate::schedule::{iterator::CopyRing, table::CronRing};
+    use crate::schedule::table::CronRing;
 
     #[derive(Clone, Debug)]
     pub struct Seconds(CronRing);
@@ -311,7 +319,8 @@ mod time {
 
         #[test]
         fn first_after_works_for_secs() {
-            let mut seconds = Seconds::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
+            let mut seconds =
+                Seconds::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
             let now = Utc::now();
 
             let next = seconds.first_after(now.second() as u8);
@@ -333,7 +342,8 @@ mod time {
 
         #[test]
         fn first_after_works_for_mins_no_overflow() {
-            let mut minutes = Minutes::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
+            let mut minutes =
+                Minutes::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
             let now = Utc::now();
 
             let next = minutes.first_after(now.minute() as u8, false);
@@ -345,7 +355,8 @@ mod time {
 
         #[test]
         fn first_after_works_for_mins_overflow() {
-            let mut minutes = Minutes::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
+            let mut minutes =
+                Minutes::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
             for i in 0..60 {
                 let now2 = i;
 
@@ -421,8 +432,8 @@ impl Date {
         time_overflow: bool,
         mut days_month: u8,
         mut days_week: u8,
-        months: u8,
-        year: u32,
+        starting_month: u8,
+        starting_year: u32,
     ) -> Option<NaiveDate> {
         // Check for next day, only until the overflow occurs
         // (or until day is found).
@@ -455,23 +466,85 @@ impl Date {
         //
 
         // Step 1: Set the months to the first available month
-        let (month, year_overflow) = self.months.first_after(months);
-        self.year = Some(year + year_overflow as u32);
+        let (month, year_overflow) = self.months.first_after(starting_month);
+        self.year = Some(starting_year + year_overflow as u32);
 
         // Step 2: If the next month and year are not equal to the given values, then
         //         Set days_month to 1, and calculate the days_week from the
         //         `month`/`days_month`/`self.year` value.
-        if month != months || self.year.unwrap() != year {
+        if month != starting_month || self.year.unwrap() != starting_year {
             let first_of_the_month = 1;
-            days_week = Self::calculate_weekday_from(
-                months,
-                year,
-                days_week,
-                days_month,
-                month,
-                self.year.unwrap(),
-                first_of_the_month,
-            );
+            // Calculate the number of days that have passed from the
+            // last day/month/year.
+            let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
+            let mut days_of_the_month = CopyRing::borrowed(&months_to_days_no_leap);
+            days_of_the_month.rotate_left(starting_month.into()); // Puts us on the month after, not the current month.
+
+            // We want to calculate the number of days from the open range of the first month
+            // to the last month. But, we have to account for the fact that the first month and
+            // the last month may not be full days, AND that there might be leap days within this
+            // entire bound.
+
+            // To make this work, we first calculate the number of months that have passed,
+            // not including the first and the last month. If the first and last month are the
+            // same, then this value should be 0. Furthermore, if the first and last month are
+            // only a month apart, then this value should also be 0.
+            let months_in_a_year: u32 = 12;
+            let months_passed_open_range = {
+                let mut end_year = self.year.unwrap();
+                let end_month = month
+                    .checked_sub(2)
+                    .and_then(|x| Some(x + 1))
+                    .unwrap_or_else(|| {
+                        end_year -= 1;
+                        months_in_a_year as u8
+                    }) as u32;
+
+                let mut starting_year = starting_year;
+                let starting_month: u32 = {
+                    let temp_month = starting_month as u32 + 1;
+                    if temp_month > months_in_a_year {
+                        starting_year += 1;
+                        1
+                    } else {
+                        temp_month
+                    }
+                };
+
+                end_month + months_in_a_year * (end_year - starting_year) - starting_month
+            };
+
+            if starting_month == month && starting_year == self.year.unwrap() {
+                assert_eq!(months_passed_open_range, 0);
+            }
+
+            // Now, we calculate the number of days that have passed from the open
+            // range, and we don't account for leap years/days at all.
+            let sum_days_open_range: u32 = days_of_the_month
+                .take_ref(months_passed_open_range as usize)
+                .map(Into::<u32>::into)
+                .sum();
+
+            // Then, we calculate the leap years separately, but still only considering
+            // the years within the open range. Because of that, this might not enter
+            // the loop at all if the years are the same. We'll come back to this later.
+            let leap_days_open_range = ((starting_year + 1)..self.year.unwrap())
+                .filter(|&year| crate::is_leap_year(year))
+                .count();
+
+            let first_month_days = {
+                let mut days_in_this_month = months_to_days_no_leap[(starting_month - 1) as usize];
+                if crate::is_leap_year(starting_year) || starting_month == 2 {
+                    days_in_this_month += 1;
+                }
+                days_in_this_month - days_month
+            };
+            let days_until_first_of_next_month =
+                sum_days_open_range + leap_days_open_range as u32 + first_month_days as u32;
+
+            // With the number of days until the first of the month, we can now calculate the 
+            // weekday, and finally set the days of the month and week.
+            days_week = Days::next_weekday_from_last(days_week as u32, days_until_first_of_next_month);
             days_month = first_of_the_month;
         }
 
@@ -501,17 +574,6 @@ impl Date {
                     .unwrap(),
             ),
         };
-
-        match maybe_next {
-            date::NextDay::Week(week) => {
-                // Calculate the day of the month from this weekday.
-
-                todo!()
-            }
-            date::NextDay::Both { week, month } => todo!(),
-            date::NextDay::Month(month) => todo!(),
-        }
-
         todo!()
     }
 
