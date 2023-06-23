@@ -1,5 +1,5 @@
-pub use schedule::Schedule;
 pub use schedule::CopyRing;
+pub use schedule::Schedule;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Error {
@@ -37,8 +37,8 @@ mod schedule {
     };
     use crate::{Error, DEFAULT_DAYS_MONTH, DEFAULT_HOURS, DEFAULT_MONTHS};
     use chrono::{DateTime, TimeZone, Utc};
-    use std::str::FromStr;
     pub use iterator::CopyRing;
+    use std::str::FromStr;
 
     mod iterator;
     mod table;
@@ -167,7 +167,14 @@ mod schedule {
     }
 
     fn annually() -> FieldTable {
-        todo!()
+        FieldTable::builder()
+            .with_secs(CopyRing::from(0))
+            .with_mins(CopyRing::from(0))
+            .with_hours(CopyRing::from(0))
+            .with_days_month(CopyRing::from(0))
+            .with_months(CopyRing::from(0))
+            .build()
+            .unwrap()
     }
 
     fn monthly() -> FieldTable {
@@ -194,7 +201,10 @@ mod schedule {
 }
 
 const fn days_in_a_month(month: u8, year: u32) -> u8 {
-    assert!(month >= 1 && month <= 12, "Number has to be from 1 - 12, corresponding to the months of the year.");
+    assert!(
+        month >= 1 && month <= 12,
+        "Number has to be from 1 - 12, corresponding to the months of the year."
+    );
     let month_to_days_with_leap: [u8; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let converter = [MONTH_TO_DAYS_NO_LEAP, month_to_days_with_leap];
     converter[is_leap_year(year) as usize][month as usize - 1]

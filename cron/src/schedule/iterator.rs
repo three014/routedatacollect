@@ -265,7 +265,7 @@ where
         }
     }
 
-    pub fn set_init(&mut self, init: bool) {
+    fn set_init(&mut self, init: bool) {
         self.init = init;
     }
 
