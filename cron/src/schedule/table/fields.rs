@@ -103,11 +103,6 @@ mod date {
             days_week: u8,
             days_in_month: u8,
         ) -> NextDay {
-            let cmp_days = if time_overflow {
-                super::cmp_overflow
-            } else {
-                super::cmp_no_overflow
-            };
             let check_for_end_of_month = |day: &u8| *day <= days_in_month;
 
             self.reset();
@@ -116,39 +111,47 @@ mod date {
                     month,
                     week: (week, _),
                 } => NextDay::Both {
+                    month: month
+                        .binary_search_or_greater_by(|probe| {
+                            probe.cmp(&(days_month + time_overflow as u8))
+                        })
+                        .filter(|(day, overflow)| !overflow && check_for_end_of_month(day))
+                        .map(|(day, _)| day),
                     week: week
-                        .until_start()
-                        .find(|&day| cmp_days(day, days_week))
+                        .binary_search_or_greater_by(|probe| {
+                            probe.cmp(&(days_week + time_overflow as u8))
+                        })
+                        .map(|(day, _)| day)
                         .or_else(|| week.next())
                         .map(|day| {
                             let day_of_month =
                                 days_month + Days::num_weekdays_since(days_week.into(), day.into());
                             let day_of_week = day;
                             (day_of_month, day_of_week)
-                        }) // This will always be Some
-                        .filter(|(day, _)| check_for_end_of_month(day)), // Now it can vary
-                    month: month
-                        .until_start()
-                        .find(|&day| cmp_days(day, days_month))
-                        .filter(check_for_end_of_month),
+                        })
+                        .filter(|(day, _)| check_for_end_of_month(day)),
                 },
                 Days::Month(month) => NextDay::Month(
                     month
-                        .until_start()
-                        .find(|&day| cmp_days(day, days_month))
-                        .filter(check_for_end_of_month),
+                        .binary_search_or_greater_by(|probe| {
+                            probe.cmp(&(days_month + time_overflow as u8))
+                        })
+                        .filter(|(day, overflow)| !overflow && check_for_end_of_month(day))
+                        .map(|(day, _)| day),
                 ),
                 Days::Week((week, _)) => NextDay::Week(
-                    week.until_start()
-                        .find(|&day| cmp_days(day, days_week))
-                        .or_else(|| week.next())
-                        .map(|day| {
-                            let day_of_month =
-                                days_month + Days::num_weekdays_since(days_week.into(), day.into());
-                            let day_of_week = day;
-                            (day_of_month, day_of_week)
-                        }) // This will always be Some
-                        .filter(|(day, _)| check_for_end_of_month(day)), // Now it can vary
+                    week.binary_search_or_greater_by(|probe| {
+                        probe.cmp(&(days_week + time_overflow as u8))
+                    })
+                    .map(|(day, _)| day)
+                    .or_else(|| week.next())
+                    .map(|day| {
+                        let day_of_month =
+                            days_month + Days::num_weekdays_since(days_week.into(), day.into());
+                        let day_of_week = day;
+                        (day_of_month, day_of_week)
+                    })
+                    .filter(|(day, _)| check_for_end_of_month(day)),
                 ),
             }
         }
@@ -437,25 +440,16 @@ fn next(ring: &mut CronRing, overflow: bool) -> (u8, bool) {
 }
 
 fn first_after(ring: &mut CronRing, overflow: bool, then: u8) -> (u8, bool) {
-    let cmp_fn = if overflow {
-        cmp_overflow
-    } else {
-        cmp_no_overflow
-    };
-    let found = ring.until_start().find(|&now| cmp_fn(now, then));
+    // let found = ring.until_start().find(|&now| cmp_fn(now, then));
+    let found = ring
+        .binary_search_or_greater_by(|probe| probe.cmp(&(then + overflow as u8)))
+        .filter(|&(_, overflow)| !overflow)
+        .map(|(next, _)| next);
     if let Some(next) = found {
         (next, false)
     } else {
         (ring.next().unwrap(), true)
     }
-}
-
-fn cmp_no_overflow(left: u8, right: u8) -> bool {
-    left >= right
-}
-
-fn cmp_overflow(left: u8, right: u8) -> bool {
-    left > right
 }
 
 #[derive(Clone, Debug)]
@@ -497,7 +491,7 @@ pub struct DateBuilder {
 impl Date {
     fn at_year_limit(&self, starting_year: u32) -> bool {
         if let Some(year) = self.year {
-            year - starting_year > 4
+            year - starting_year >= 4
         } else {
             false
         }
@@ -522,6 +516,7 @@ impl Date {
         self.months.reset();
         let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
         let mut found = false;
+        let mut first_run = true;
         while !found && !self.at_year_limit(starting_year) {
             // Check for next day, only until the overflow occurs
             // (or until day is found).
@@ -554,7 +549,11 @@ impl Date {
             //
 
             // Step 1: Set the months to the first available month
-            let (month, year_overflow) = self.months.first_after(starting_month);
+            let (month, year_overflow) = if first_run {
+                self.months.first_after(starting_month)
+            } else {
+                self.months.next(true)
+            };
             if let Some(year) = self.year_mut_checked() {
                 *year += year_overflow as u32;
             } else {
@@ -710,6 +709,8 @@ impl Date {
                 self.cache.last_month = month;
                 self.cache.last_year = self.year_unchecked();
                 found = true;
+            } else {
+                first_run = false;
             }
         }
 
@@ -728,13 +729,10 @@ impl Date {
     ) -> u32 {
         let months_in_a_year: u32 = 12;
         let mut end_year = year;
-        let end_month = month
-            .checked_sub(2)
-            .and_then(|x| Some(x + 1))
-            .unwrap_or_else(|| {
-                end_year -= 1;
-                months_in_a_year as u8
-            }) as u32;
+        let end_month = month.checked_sub(2).map(|x| x + 1).unwrap_or_else(|| {
+            end_year -= 1;
+            months_in_a_year as u8
+        }) as u32;
 
         let mut starting_year = starting_year;
         let starting_month: u32 = {
@@ -747,7 +745,7 @@ impl Date {
             }
         };
 
-        (end_month + months_in_a_year * (end_year - starting_year))
+        (end_month + months_in_a_year * end_year.checked_sub(starting_year).unwrap_or_default())
             .checked_sub(starting_month)
             .unwrap_or_default()
     }
@@ -924,6 +922,8 @@ impl TimeBuilder {
 
 #[cfg(test)]
 mod test {
+    use chrono::{NaiveDate, Utc};
+
     use super::{
         date::{Days, Months},
         Date,
@@ -934,17 +934,56 @@ mod test {
     #[test]
     fn first_after_for_leap_day() {
         let mut d = Date {
-            days: Days::Month(CronRing::arc_with_size(Arc::new([28, 29]))),
+            days: Days::Month(CronRing::arc_with_size(Arc::new([29]))),
             months: Months::new(CronRing::arc_with_size(Arc::new([2]))),
-            year: Some(2024),
+            year: None,
             cache: Default::default(),
         };
 
-        let f = d.first_after(false, 24, 6, 6, 2023);
+        let f = d.first_after(false, 24, 6, 6, 2024);
         if let Some(f) = f {
             dbg!(f);
         } else {
             dbg!("Couldn't get next date");
         }
+    }
+
+    #[test]
+    fn first_after_for_dec_jan() {
+        let mut d = Date {
+            days: Days::Month(CronRing::arc_with_size(Arc::new([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30,
+            ]))),
+            months: Months::new(CronRing::borrowed_with_size(&crate::DEFAULT_MONTHS)),
+            year: None,
+            cache: Default::default(),
+        };
+
+        let f = d.first_after(true, 30, 6, 12, 2024);
+        if let Some(f) = f {
+            dbg!(f);
+        } else {
+            dbg!("Couldn't get next date");
+        }
+    }
+
+    #[test]
+    fn profile() {
+        let mut d = Date {
+            days: Days::Month(CronRing::arc_with_size(Arc::new([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30,
+            ]))),
+            months: Months::new(CronRing::borrowed_with_size(&crate::DEFAULT_MONTHS)),
+            year: None,
+            cache: Default::default(),
+        };
+        let then = Utc::now();
+        for _ in 0..1000000 {
+            let a = d.first_after(true, 30, 6, 12, 2024);
+        }
+        let now = Utc::now();
+        println!("{:?}", now - then);
     }
 }

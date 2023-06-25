@@ -1,6 +1,6 @@
 use super::Schedule;
 use chrono::{DateTime, TimeZone};
-use std::{fmt::Debug, ops::Deref, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc, cmp::Ordering};
 
 pub struct ScheduleIter<'a, Tz: TimeZone> {
     schedule: &'a mut Schedule,
@@ -83,7 +83,7 @@ where
 {
     index: usize,
     collection: Container<'a, T, N>,
-    init: bool
+    init: bool,
 }
 
 impl<T: Copy, const N: usize> CopyRing<'static, T, N> {
@@ -181,7 +181,7 @@ where
     /// wrapped back around to the
     /// first item.
     ///
-    /// True if wrapping occurred, false otherwise.
+    /// `true` if wrapping occurred, `false` otherwise.
     pub fn checked_next(&mut self) -> Option<(T, bool)> {
         let was_init = self.is_init();
         let prev_index = self.index;
@@ -211,7 +211,7 @@ where
 
     pub fn rotate_left(&mut self, n: usize) {
         self.index = (self.index + n) % self.period();
-        self.set_init(true);
+        self.set_init(n != 0 || self.init);
         //println!("Rotated left - new index: {}", self.index);
     }
 
@@ -220,7 +220,7 @@ where
         let idx = self.index as isize;
         let x = n as isize;
         self.index = ((-((x - idx) % len) + len) % len) as usize;
-        self.set_init(true);
+        self.set_init(n != 0 || self.init);
         //println!("Rotated right - new index: {}", self.index);
     }
 
@@ -271,6 +271,40 @@ where
 
     pub const fn is_init(&self) -> bool {
         self.init
+    }
+}
+
+impl<'a, T: Copy + Ord + 'a, const N: usize> CopyRing<'a, T, N> {
+    /// Binary searches the internal buffer for a given element. 
+    /// If the slice is not sorted, the returned result 
+    /// is unspecified and meaningless.
+    /// 
+    /// If the element was not found, then the function returns the first 
+    /// item to the right of where the element should have been.
+    /// But if there is no element to the right, then the function will
+    /// wrap around and select the first element, returning the 
+    /// element with a value of `true`. Otherwise, the bool will be `false`.
+    pub fn binary_search_or_greater(&mut self, x: &T) -> Option<(T, bool)> {
+        self.reset();
+        let index = match self.collection.binary_search(x) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        self.rotate_left(index);
+        self.checked_next()
+    }
+
+    pub fn binary_search_or_greater_by<F>(&mut self, f: F) -> Option<(T, bool)> 
+    where
+        F: FnMut(&T) -> Ordering,
+    {
+        self.reset();
+        let index = match self.collection.binary_search_by(f) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        self.rotate_left(index);
+        self.checked_next()
     }
 }
 
