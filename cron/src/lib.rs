@@ -1,4 +1,4 @@
-pub use schedule::CopyRing;
+pub use collection::{CopyRing, CycleIterMut};
 pub use schedule::Schedule;
 
 #[derive(Debug, Clone, Copy)]
@@ -30,18 +30,16 @@ static DEFAULT_DAYS_MONTH: [u8; 31] = [
 static DEFAULT_MONTHS: [u8; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const MONTH_TO_DAYS_NO_LEAP: [u8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
+mod collection;
+mod table;
 mod schedule {
-    use self::{
-        iterator::{OwnedScheduleIter, ScheduleIter},
-        table::FieldTable,
-    };
-    use crate::{Error, DEFAULT_DAYS_MONTH, DEFAULT_HOURS, DEFAULT_MONTHS};
+    use self::iterator::{OwnedScheduleIter, ScheduleIter};
+    use crate::table::FieldTable;
+    use crate::{CopyRing, Error, DEFAULT_DAYS_MONTH, DEFAULT_HOURS, DEFAULT_MONTHS};
     use chrono::{DateTime, TimeZone, Utc};
-    pub use iterator::CopyRing;
     use std::str::FromStr;
 
     mod iterator;
-    mod table;
 
     #[derive(Clone, Debug)]
     pub struct Schedule {
@@ -190,6 +188,7 @@ mod schedule {
             thread,
         };
 
+        #[allow(unused)]
         fn foo() {
             let mut _s = Arc::new(Mutex::new(Schedule::hourly()));
             let _j = thread::spawn(move || {
@@ -198,16 +197,6 @@ mod schedule {
             });
         }
     }
-}
-
-const fn days_in_a_month(month: u8, year: u32) -> u8 {
-    assert!(
-        month >= 1 && month <= 12,
-        "Number has to be from 1 - 12, corresponding to the months of the year."
-    );
-    let month_to_days_with_leap: [u8; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let converter = [MONTH_TO_DAYS_NO_LEAP, month_to_days_with_leap];
-    converter[is_leap_year(year) as usize][month as usize - 1]
 }
 
 const fn is_leap_year(year: u32) -> bool {

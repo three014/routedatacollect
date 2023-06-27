@@ -3,24 +3,28 @@ use self::{
     time::{Hours, Minutes, Seconds},
 };
 use super::{CronRing, Error};
-use crate::schedule::{iterator::CopyRing, table::fields::date::LastUsed};
+use crate::CopyRing;
 use chrono::{NaiveDate, NaiveTime};
+use date::LastUsed;
 
 mod date {
-    use crate::schedule::table::CronRing;
+    use crate::{table::CronRing, CopyRing};
 
     #[derive(Clone, Debug)]
     pub enum Days {
         Both {
             month: CronRing,
-            week: (CronRing, DayCache),
+            week: (CronRing, Option<DayCache>),
         },
         Month(CronRing),
-        Week((CronRing, DayCache)),
+        Week((CronRing, Option<DayCache>)),
     }
 
     #[derive(Clone, Debug)]
     pub struct Months(CronRing);
+
+    #[derive(Clone, Debug, Default)]
+    pub struct Years(Option<u32>);
 
     #[derive(Clone, Debug, Default)]
     pub struct DayCache {
@@ -50,49 +54,113 @@ mod date {
         Month(Option<u8>),
     }
 
-    pub mod days {
-        use super::DayCache;
-        use crate::schedule::table::CronRing;
-
-        #[derive(Debug)]
-        pub struct Both<'a> {
-            pub month: &'a mut CronRing,
-            pub week: &'a mut (CronRing, DayCache),
-        }
-        #[derive(Debug)]
-        pub struct Month<'a>(pub &'a mut CronRing);
-        #[derive(Debug)]
-        pub struct Week<'a>(pub &'a mut (CronRing, DayCache));
-    }
-
     impl Days {
-        pub fn reset(&mut self) {
-            match self {
-                Days::Both {
-                    month,
-                    week: (week, _),
-                } => {
-                    month.reset();
-                    week.reset();
-                }
-                Days::Month(month) => month.reset(),
-                Days::Week((week, _)) => week.reset(),
+        pub fn week(ring: CronRing) -> Self {
+            Self::Week((ring, None))
+        }
+
+        pub fn month(ring: CronRing) -> Self {
+            Self::Month(ring)
+        }
+
+        pub fn both(month: CronRing, week: CronRing) -> Self {
+            Self::Both {
+                month,
+                week: (week, None),
             }
         }
 
-        pub const fn num_weekdays_since(start_weekday: i16, end_weekday: i16) -> u8 {
-            let days_in_a_week: i16 = 7;
-            ((end_weekday + days_in_a_week - start_weekday) % days_in_a_week) as u8
+        pub fn reset(&mut self) {
+            let _ = self.apply_with_both(CopyRing::reset, |(w, _)| w.reset());
         }
 
-        pub fn cache_mut(&mut self) -> Option<&mut DayCache> {
+        pub(self) const fn num_weekdays_since(start_weekday: i16, end_weekday: i16) -> u8 {
+            const DAYS_IN_A_WEEK: i16 = 7;
+            ((end_weekday + DAYS_IN_A_WEEK - start_weekday) % DAYS_IN_A_WEEK) as u8
+        }
+
+        pub fn cache_mut(&mut self) -> Option<&mut Option<DayCache>> {
+            self.apply_with_week(|(_, cache)| cache)
+        }
+
+        fn cache(&self) -> Option<&DayCache> {
+            self.query_with_week(|(_, cache)| cache)
+                .and_then(|cache| cache.as_ref())
+        }
+
+        /// Returns the last day saved in the cache, or the last day in the month
+        /// copyring if no cache exists.
+        pub fn last_day(&self) -> u8 {
+            if let Some(cache) = self.cache() {
+                cache.last_month_day
+            } else {
+                self.query_with_month(|month| month.peek_prev().unwrap())
+                    .unwrap()
+            }
+        }
+
+        pub fn query_with_week<'a: 'b, 'b, W, U>(&'a self, week_fn: W) -> Option<U>
+        where
+            W: FnOnce(&'b (CronRing, Option<DayCache>)) -> U,
+        {
             match self {
-                Self::Both {
-                    month: _,
-                    week: (_, cache),
-                } => Some(cache),
-                Self::Week((_, cache)) => Some(cache),
+                Days::Both { month: _, week } => Some(week_fn(week)),
+                Days::Week(week) => Some(week_fn(week)),
                 _ => None,
+            }
+        }
+
+        pub fn query_with_month<'a: 'b, 'b, M, U>(&'a self, month_fn: M) -> Option<U>
+        where
+            M: FnOnce(&'b CronRing) -> U,
+        {
+            match self {
+                Days::Both { month, week: _ } => Some(month_fn(month)),
+                Days::Month(month) => Some(month_fn(month)),
+                _ => None,
+            }
+        }
+
+        pub fn query_with_both<'a: 'b, 'b, M, W, T, U>(
+            &'a self,
+            month_fn: M,
+            week_fn: W,
+        ) -> (Option<T>, Option<U>)
+        where
+            M: FnOnce(&'b CronRing) -> T,
+            W: FnOnce(&'b (CronRing, Option<DayCache>)) -> U,
+        {
+            match self {
+                Days::Both { month, week } => (Some(month_fn(month)), Some(week_fn(week))),
+                Days::Month(month) => (Some(month_fn(month)), None),
+                Days::Week(week) => (None, Some(week_fn(week))),
+            }
+        }
+
+        fn apply_with_week<'a: 'b, 'b, W, U>(&'a mut self, week_fn: W) -> Option<U>
+        where
+            W: FnOnce(&'b mut (CronRing, Option<DayCache>)) -> U,
+        {
+            match self {
+                Days::Both { month: _, week } => Some(week_fn(week)),
+                Days::Week(week) => Some(week_fn(week)),
+                _ => None,
+            }
+        }
+
+        fn apply_with_both<'a: 'b, 'b, M, W, T, U>(
+            &'a mut self,
+            month_fn: M,
+            week_fn: W,
+        ) -> (Option<T>, Option<U>)
+        where
+            M: FnOnce(&'b mut CronRing) -> T,
+            W: FnOnce(&'b mut (CronRing, Option<DayCache>)) -> U,
+        {
+            match self {
+                Days::Both { month, week } => (Some(month_fn(month)), Some(week_fn(week))),
+                Days::Month(month) => (Some(month_fn(month)), None),
+                Days::Week(week) => (None, Some(week_fn(week))),
             }
         }
 
@@ -103,57 +171,90 @@ mod date {
             days_week: u8,
             days_in_month: u8,
         ) -> NextDay {
-            let check_for_end_of_month = |day: &u8| *day <= days_in_month;
-
             self.reset();
-            match self {
-                Days::Both {
-                    month,
-                    week: (week, _),
-                } => NextDay::Both {
-                    month: month
+            let result = self.apply_with_both(
+                |month_ring| {
+                    month_ring
                         .binary_search_or_greater_by(|probe| {
                             probe.cmp(&(days_month + time_overflow as u8))
                         })
-                        .filter(|(day, overflow)| !overflow && check_for_end_of_month(day))
-                        .map(|(day, _)| day),
-                    week: week
+                        .filter(|&(day, overflow)| {
+                            !overflow && Self::check_for_end_of_month(day, days_in_month)
+                        })
+                        .map(|(day, _)| day)
+                },
+                |(week_ring, _)| {
+                    week_ring
                         .binary_search_or_greater_by(|probe| {
                             probe.cmp(&(days_week + time_overflow as u8))
                         })
                         .map(|(day, _)| day)
-                        .or_else(|| week.next())
+                        .or_else(|| week_ring.next())
                         .map(|day| {
                             let day_of_month =
                                 days_month + Days::num_weekdays_since(days_week.into(), day.into());
                             let day_of_week = day;
                             (day_of_month, day_of_week)
                         })
-                        .filter(|(day, _)| check_for_end_of_month(day)),
+                        .filter(|&(day, _)| Self::check_for_end_of_month(day, days_in_month))
                 },
-                Days::Month(month) => NextDay::Month(
-                    month
-                        .binary_search_or_greater_by(|probe| {
-                            probe.cmp(&(days_month + time_overflow as u8))
-                        })
-                        .filter(|(day, overflow)| !overflow && check_for_end_of_month(day))
-                        .map(|(day, _)| day),
-                ),
-                Days::Week((week, _)) => NextDay::Week(
-                    week.binary_search_or_greater_by(|probe| {
-                        probe.cmp(&(days_week + time_overflow as u8))
-                    })
-                    .map(|(day, _)| day)
-                    .or_else(|| week.next())
-                    .map(|day| {
-                        let day_of_month =
-                            days_month + Days::num_weekdays_since(days_week.into(), day.into());
-                        let day_of_week = day;
-                        (day_of_month, day_of_week)
-                    })
-                    .filter(|(day, _)| check_for_end_of_month(day)),
-                ),
+            );
+            match result {
+                (None, None) => unreachable!("Days should have one or both of the fields."),
+                (None, Some(week)) => NextDay::Week(week),
+                (Some(month), None) => NextDay::Month(month),
+                (Some(month), Some(week)) => NextDay::Both { month, week },
             }
+        }
+
+        pub fn next(&mut self, time_overflow: bool, days_in_month: u8) -> NextDay {
+            let (month_overflow, week_overflow) = if let Some(cache) = self.cache() {
+                match cache.last_used {
+                    LastUsed::Week => (false, time_overflow),
+                    LastUsed::Month => (time_overflow, false),
+                    LastUsed::Both => (time_overflow, time_overflow),
+                }
+            } else {
+                (time_overflow, false)
+            };
+            let result = self.apply_with_both(
+                |month_ring| {
+                    Some(super::next(month_ring, month_overflow))
+                        .filter(|&(day, overflow)| {
+                            !overflow && Self::check_for_end_of_month(day, days_in_month)
+                        })
+                        .map(|(day, _)| day)
+                },
+                |(week_ring, cache)| {
+                    Some(super::next(week_ring, week_overflow))
+                        .map(|(day, _)| day)
+                        .or_else(|| week_ring.next())
+                        .map(|day| {
+                            let last_month_day = cache.as_ref().unwrap().last_month_day;
+                            let last_weekday = cache.as_ref().unwrap().last_weekday;
+                            let day_of_month = last_month_day
+                                + Days::num_weekdays_since(last_weekday.into(), day.into());
+                            let day_of_week = day;
+                            (day_of_month, day_of_week)
+                        })
+                        .filter(|&(day, _)| {
+                            Self::check_for_end_of_month(
+                                day,
+                                cache.as_ref().unwrap().last_month_day,
+                            )
+                        })
+                },
+            );
+            match result {
+                (None, None) => unreachable!("Days should have one or both of the fields."),
+                (None, Some(week)) => NextDay::Week(week),
+                (Some(month), None) => NextDay::Month(month),
+                (Some(month), Some(week)) => NextDay::Both { month, week },
+            }
+        }
+
+        fn check_for_end_of_month(day: u8, days_in_month: u8) -> bool {
+            day <= days_in_month
         }
 
         pub const fn next_weekday_from_last(first_weekday: u32, num_days_to_advance: u32) -> u8 {
@@ -183,7 +284,7 @@ mod date {
 
     #[cfg(test)]
     mod test {
-        use crate::schedule::table::fields::date::Days;
+        use crate::table::fields::date::Days;
 
         #[test]
         fn next_weekday_from_last_works() {
@@ -222,7 +323,7 @@ mod date {
 }
 
 mod time {
-    use crate::schedule::table::CronRing;
+    use crate::table::CronRing;
 
     #[derive(Clone, Debug)]
     pub struct Seconds(CronRing);
@@ -323,7 +424,7 @@ mod time {
     #[cfg(test)]
     mod test {
         use super::{Hours, Minutes, Seconds};
-        use crate::schedule::iterator::CopyRing;
+        use crate::CopyRing;
         use chrono::{Timelike, Utc};
         use rand::Rng;
 
@@ -435,7 +536,7 @@ fn next(ring: &mut CronRing, overflow: bool) -> (u8, bool) {
     if overflow {
         ring.checked_next().unwrap()
     } else {
-        (ring.peek().unwrap(), false)
+        (ring.peek_next().unwrap(), false)
     }
 }
 
@@ -518,36 +619,6 @@ impl Date {
         let mut found = false;
         let mut first_run = true;
         while !found && !self.at_year_limit(starting_year) {
-            // Check for next day, only until the overflow occurs
-            // (or until day is found).
-            //
-            //     Move both days and weeks with
-            //     `CopyRing::until_start()` iter, keeping
-            //     track of the current value outside the
-            //     loop.
-            //
-            //     If not found for either type of day, then
-            //     advance the month to the next month and repeat
-            //     first loop.
-            //
-            //         If the month overflowed, increment years by 1.
-            //         After advancing the month, recalcuate the
-            //         given weekday so that on the next run, the
-            //         weekday ring only has to find the
-            //         first weekday after the first day of the new
-            //         month.
-            //
-            //     If one type found the next day, then check if
-            //     that day is actually in the current month.
-            //
-            //         If not, then reset that type, advance the month
-            //         to the next month, then check if the other
-            //         type is valid.
-            //
-            //             If the month overflowed, increment years by 1.
-            //
-            //
-
             // Step 1: Set the months to the first available month
             let (month, year_overflow) = if first_run {
                 self.months.first_after(starting_month)
@@ -607,7 +678,7 @@ impl Date {
                     if crate::is_leap_year(starting_year) && starting_month == 2 {
                         days_in_this_month += 1;
                     }
-                    days_in_this_month - days_month
+                    days_in_this_month - days_month + 1
                 };
                 let days_until_first_of_next_month =
                     sum_days + leap_days as u32 + first_month_days as u32;
@@ -634,7 +705,6 @@ impl Date {
                 }
                 days_in_this_month
             };
-            self.days.reset();
             let next_day = self.days.first_after(
                 time_overflow,
                 new_days_month,
@@ -645,9 +715,11 @@ impl Date {
                 date::NextDay::Week(next_day) => {
                     if let Some((next_of_month, next_of_week)) = next_day {
                         let cache = self.days.cache_mut().unwrap();
-                        cache.last_month_day = next_of_month;
-                        cache.last_weekday = next_of_week;
-                        cache.last_used = LastUsed::Week;
+                        *cache = Some(DayCache {
+                            last_month_day: next_of_month,
+                            last_weekday: next_of_week,
+                            last_used: LastUsed::Week,
+                        });
                         Some(next_of_month)
                     } else {
                         None
@@ -661,41 +733,51 @@ impl Date {
                     match (next_day_month, next_day_week) {
                         (None, None) => None,
                         (None, Some((next_of_month, next_of_week))) => {
-                            cache.last_month_day = next_of_month;
-                            cache.last_weekday = next_of_week;
-                            cache.last_used = LastUsed::Week;
+                            *cache = Some(DayCache {
+                                last_month_day: next_of_month,
+                                last_weekday: next_of_week,
+                                last_used: LastUsed::Week,
+                            });
                             Some(next_of_month)
                         }
                         (Some(next), None) => {
-                            cache.last_month_day = next;
-                            cache.last_weekday = Days::next_weekday_from_last(
-                                new_days_week as u32,
-                                (next - new_days_month) as u32,
-                            );
-                            cache.last_used = LastUsed::Month;
+                            *cache = Some(DayCache {
+                                last_month_day: next,
+                                last_used: LastUsed::Month,
+                                last_weekday: Days::next_weekday_from_last(
+                                    new_days_week as u32,
+                                    (next - new_days_month) as u32,
+                                ),
+                            });
                             Some(next)
                         }
                         (Some(next_from_month_ring), Some((next_from_week_ring, next_weekday))) => {
                             match next_from_month_ring.cmp(&next_from_week_ring) {
                                 std::cmp::Ordering::Less => {
-                                    cache.last_month_day = next_from_month_ring;
-                                    cache.last_weekday = Days::next_weekday_from_last(
-                                        new_days_week as u32,
-                                        (next_from_month_ring - new_days_month) as u32,
-                                    );
-                                    cache.last_used = LastUsed::Month;
+                                    *cache = Some(DayCache {
+                                        last_month_day: next_from_month_ring,
+                                        last_used: LastUsed::Month,
+                                        last_weekday: Days::next_weekday_from_last(
+                                            new_days_week as u32,
+                                            (next_from_month_ring - new_days_month) as u32,
+                                        ),
+                                    });
                                     Some(next_from_month_ring)
                                 }
                                 std::cmp::Ordering::Equal => {
-                                    cache.last_month_day = next_from_month_ring;
-                                    cache.last_weekday = next_weekday;
-                                    cache.last_used = LastUsed::Both;
+                                    *cache = Some(DayCache {
+                                        last_month_day: next_from_month_ring,
+                                        last_weekday: next_weekday,
+                                        last_used: LastUsed::Both,
+                                    });
                                     Some(next_from_month_ring)
                                 }
                                 std::cmp::Ordering::Greater => {
-                                    cache.last_month_day = next_from_week_ring;
-                                    cache.last_weekday = next_weekday;
-                                    cache.last_used = LastUsed::Week;
+                                    *cache = Some(DayCache {
+                                        last_month_day: next_from_week_ring,
+                                        last_weekday: next_weekday,
+                                        last_used: LastUsed::Week,
+                                    });
                                     Some(next_from_week_ring)
                                 }
                             }
@@ -745,12 +827,25 @@ impl Date {
             }
         };
 
-        (end_month + months_in_a_year * end_year.checked_sub(starting_year).unwrap_or_default())
-            .checked_sub(starting_month)
+        end_year
+            .checked_sub(starting_year)
+            .and_then(|sub_years| {
+                (end_month + months_in_a_year * sub_years).checked_sub(starting_month)
+            })
             .unwrap_or_default()
     }
 
     pub fn next(&mut self) -> Option<NaiveDate> {
+        // First, grab the current day, month, and year from our cache
+        // We can get the weekday from our day cache, if necessary.
+
+        let days_month = self.cache.last_day;
+        let month = self.cache.last_month;
+        let year = self.cache.last_year;
+
+        // Note: we might not even need the cache. If we can get
+        // the next dates from each of the Date struct's fields,
+        // then we don't need to store them in this separate location.
         todo!()
     }
 
@@ -815,12 +910,9 @@ impl DateBuilder {
     pub fn build(&mut self) -> Result<Date, Error> {
         let days = match (self.days_month.take(), self.days_week.take()) {
             (None, None) => return Err(Error::MissingField),
-            (None, Some(week)) => Days::Week((week, DayCache::default())),
-            (Some(month), None) => Days::Month(month),
-            (Some(month), Some(week)) => Days::Both {
-                month,
-                week: (week, DayCache::default()),
-            },
+            (None, Some(week)) => Days::week(week),
+            (Some(month), None) => Days::month(month),
+            (Some(month), Some(week)) => Days::both(month, week),
         };
         let months = self.months.take().ok_or(Error::MissingField)?;
 
@@ -839,18 +931,12 @@ impl DateBuilder {
 
         if months.first().unwrap() < 1
             || months.last().unwrap() > 31
-            || match &days {
-                Days::Both {
-                    month,
-                    week: (week, _),
-                } => {
-                    week.last().unwrap() >= 7
-                        || month.first().unwrap() < 1
-                        || month.last().unwrap() > 31
-                }
-                Days::Month(month) => month.first().unwrap() < 1 || month.last().unwrap() > 31,
-                Days::Week((week, _)) => week.last().unwrap() >= 7,
-            }
+            || Some(days.query_with_both(
+                |m| m.first().unwrap() < 1 || m.last().unwrap() > 31,
+                |(w, _)| w.last().unwrap() >= 7,
+            ))
+            .map(|(m, w)| m.into_iter().chain(w.into_iter()).any(|x| x))
+            .unwrap()
         {
             return Err(Error::OutOfRange);
         }
@@ -922,30 +1008,86 @@ impl TimeBuilder {
 
 #[cfg(test)]
 mod test {
-    use chrono::{NaiveDate, Utc};
-
     use super::{
         date::{Days, Months},
         Date,
     };
-    use crate::schedule::table::CronRing;
+    use crate::table::CronRing;
+    use chrono::Utc;
     use std::sync::Arc;
 
     #[test]
     fn first_after_for_leap_day() {
         let mut d = Date {
-            days: Days::Month(CronRing::arc_with_size(Arc::new([29]))),
-            months: Months::new(CronRing::arc_with_size(Arc::new([2]))),
+            days: Days::Month(CronRing::owned([29])),
+            months: Months::new(CronRing::owned([2])),
             year: None,
             cache: Default::default(),
         };
 
+        let then = Utc::now();
         let f = d.first_after(false, 24, 6, 6, 2024);
+        let now = Utc::now();
+        println!("{:?}", now - then);
         if let Some(f) = f {
             dbg!(f);
         } else {
             dbg!("Couldn't get next date");
         }
+    }
+
+    #[test]
+    fn weekdays_works() {
+        let mut d = Date {
+            days: Days::Both {
+                month: CronRing::arc_with_size(Arc::new([
+                    6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 29,
+                    30,
+                ])),
+                week: (
+                    CronRing::arc_with_size(Arc::new([2, 5])),
+                    Default::default(),
+                ),
+            },
+            months: Months::new(CronRing::borrowed_with_size(&crate::DEFAULT_MONTHS)),
+            year: None,
+            cache: Default::default(),
+        };
+
+        let f = d.first_after(true, 30, 6, 12, 2023);
+        if let Some(f) = f {
+            dbg!(f);
+        } else {
+            dbg!("Couldn't get next date");
+        }
+        dbg!(d);
+    }
+
+    #[test]
+    fn weekdays_works_for_june() {
+        let mut d = Date {
+            days: Days::Both {
+                month: CronRing::arc_with_size(Arc::new([
+                    6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27,
+                    30,
+                ])),
+                week: (
+                    CronRing::arc_with_size(Arc::new([3, 5])),
+                    Default::default(),
+                ),
+            },
+            months: Months::new(CronRing::borrowed_with_size(&crate::DEFAULT_MONTHS)),
+            year: None,
+            cache: Default::default(),
+        };
+
+        let f = d.first_after(true, 25, 0, 6, 2023);
+        if let Some(f) = f {
+            dbg!(f);
+        } else {
+            dbg!("Couldn't get next date");
+        }
+        dbg!(d);
     }
 
     #[test]

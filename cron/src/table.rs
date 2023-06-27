@@ -1,5 +1,6 @@
+use crate::CopyRing;
+
 use self::fields::{Date, DateBuilder, Time, TimeBuilder};
-use super::iterator::CopyRing;
 use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Timelike};
 
 pub type CronRing = CopyRing<'static, u8, 1>;
@@ -215,6 +216,3 @@ impl FieldTable {
         Builder::default()
     }
 }
-
-#[cfg(test)]
-mod test;
