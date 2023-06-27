@@ -200,16 +200,11 @@ impl FieldTable {
     }
 
     pub fn next(&mut self) -> Option<NaiveDateTime> {
-        // let (sec, overflow) = self.secs.next();
-        // let (min, overflow) = self.mins.next(overflow);
-        // let (hour, overflow) = self.hours.next(overflow);
-        // let (day, overflow) = self.days.next(overflow, curr_month, curr_year);
-        // let (month, overflow) = self.months.next(overflow);
-        // let year = curr_year + overflow as u32;
-        //
+        let (time, overflow) = self.time.next()?;
+        let date = self.date.next(overflow)?;
+        Some(date.and_time(time))
         // NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
         //     .and_then(|date| date.and_hms_opt(hour as u32, min as u32, sec as u32))
-        todo!()
     }
 
     pub fn builder() -> Builder {
