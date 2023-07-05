@@ -262,6 +262,7 @@ impl<'a, T: Copy + Ord + 'a, const N: usize> CopyRing<'a, T, N> {
         self.checked_next()
     }
 
+    /// Binary searches this slice with a comparator function.
     pub fn binary_search_or_greater_by<F>(&mut self, f: F) -> Option<(T, bool)>
     where
         F: FnMut(&T) -> Ordering,

@@ -1,6 +1,5 @@
-use std::ops::{Deref, DerefMut};
-
 use crate::{table::CronRing, CopyRing};
+use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Debug)]
 pub enum DaysInner {
@@ -21,11 +20,36 @@ pub struct Months(CronRing);
 #[derive(Clone, Debug, Default)]
 pub struct Years(Option<u32>);
 
+/// A helper struct for the weekday's
+/// part of the `Days` struct. Allows
+/// the weekday ring to cache it's last
+/// weekday and corresponding month-day
+/// for future month day calculations.
+///
+/// The `month_day` `weekday`
+/// fields are meant for the day of the
+/// month that was calculated using the
+/// weekday ring, not the month-day ring.
+/// The month ring doesn't need to store
+/// its own weekday, according to the
+/// following logic:
+///
+/// If the last used day was
+/// the month ring, then the stored
+/// days are the first days that
+/// the weekday can use next time. Every
+/// time that the month ring gets selected
+/// to be used as the next day, the
+/// weekday ring needs to be updated with the
+/// next available day so that subsequent
+/// queries can be calculated.
 #[derive(Clone, Debug, Default)]
 pub struct DayCache {
-    pub last_month_day: u8,
-    pub last_weekday: u8,
-    pub last_used: LastUsed,
+    pub month_day: u8,
+    pub weekday: u8,
+    pub month: u8,
+    pub last: LastUsed,
+    pub year: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -50,47 +74,58 @@ pub enum NextDay {
 }
 
 #[derive(Clone, Debug)]
-pub struct Response<M, W>((Option<M>, Option<W>));
+pub struct Response<Month, Week>((Option<Month>, Option<Week>));
 
-impl<M, W> Deref for Response<M, W> {
-    type Target = (Option<M>, Option<W>);
+#[derive(Clone, Debug)]
+pub struct TryMerge<B, T>(Result<B, Response<T, T>>);
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl<Month, Week> Response<Month, Week> {
+    pub fn new(month: Option<Month>, week: Option<Week>) -> Self {
+        Self((month, week))
     }
-}
 
-impl<M, W> DerefMut for Response<M, W> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<M, W> Response<M, W> {
-    pub fn map<F, G, B>(self, month_map: F, week_map: G) -> impl ExactSizeIterator<Item = B>
+    pub fn map<M, W, T, U>(self, month_fn: M, week_fn: W) -> Response<T, U>
     where
-        F: FnOnce(M) -> B,
-        G: FnOnce(W) -> B,
+        M: FnOnce(Month) -> T,
+        W: FnOnce(Week) -> U,
     {
-        struct Combined<T>((Option<T>, Option<T>));
-        impl<T> Iterator for Combined<T> {
-            type Item = T;
+        let (m, w) = self.0;
+        Response((m.map(month_fn), w.map(week_fn)))
+    }
 
-            fn next(&mut self) -> Option<Self::Item> {
-                self.0 .0.take().or_else(|| self.0 .1.take())
-            }
+    pub fn map_week<W, U>(self, week_fn: W) -> Response<Month, U>
+    where
+        W: FnOnce(Week) -> U,
+    {
+        let (m, w) = self.0;
+        Response((m, w.map(week_fn)))
+    }
 
-            fn size_hint(&self) -> (usize, Option<usize>) {
-                match self.0 {
-                    (None, None) => (0, Some(0)),
-                    (Some(_), None) | (None, Some(_)) => (1, Some(1)),
-                    (Some(_), Some(_)) => (2, Some(2)),
-                }
-            }
+    pub fn inspect_week<W>(self, week_fn: W) -> Response<Month, Week>
+    where
+        W: FnOnce(&Week),
+    {
+        let (month, week) = self.0;
+        if let Some(ref week) = week {
+            week_fn(week);
         }
-        impl<T> ExactSizeIterator for Combined<T> {}
+        Response((month, week))
+    }
+}
 
-        Combined((self.0 .0.map(month_map), self.0 .1.map(week_map)))
+impl<T> Response<T, T> {
+    /// Attempts to merge both the `Month` and `Week` generic types
+    /// into one item of type `B`. If either the month or week
+    /// doesn't exist, then the original response gets returned
+    /// without the function applied to the data.
+    pub fn try_merge<B, F>(self, f: F) -> TryMerge<B, T>
+    where
+        F: FnOnce(T, T) -> B,
+    {
+        match self {
+            Response((Some(m), Some(w))) => TryMerge(Ok(f(m, w))),
+            Response(data) => TryMerge(Err(Response(data))),
+        }
     }
 }
 
@@ -101,6 +136,47 @@ impl Response<bool, bool> {
             (None, Some(w)) => w,
             (Some(m), None) => m,
             (Some(m), Some(w)) => m || w,
+        }
+    }
+}
+
+impl<B, T> TryMerge<B, T> {
+    pub fn or_else_map<M, W>(self, month_fn: M, week_fn: W) -> Option<B>
+    where
+        M: FnOnce(T) -> B,
+        W: FnOnce(T) -> B,
+    {
+        match self.0 {
+            Ok(item) => Some(item),
+            Err(response) => match response.0 {
+                (None, None) => None,
+                (None, Some(w)) => Some(week_fn(w)),
+                (Some(m), None) => Some(month_fn(m)),
+                _ => unreachable!("Should not have been created with both fields"),
+            },
+        }
+    }
+}
+
+impl<T> TryMerge<T, T> {
+    /// Returns the result of applying `try_merge` to the value
+    /// if both fields existed, or just returns the inner value
+    /// in the case that only one of the fields existed. This is
+    /// a terminal operation.
+    ///
+    /// This function is available if and only iff `try_merge`
+    /// returned the same type as the inner fields of `Response`.
+    /// Otherwise, use `or_else_map` to convert the fields to
+    /// the correct type.
+    pub fn or(self) -> Option<T> {
+        match self.0 {
+            Ok(item) => Some(item),
+            Err(response) => match response.0 {
+                (None, None) => None,
+                (None, Some(w)) => Some(w),
+                (Some(m), None) => Some(m),
+                _ => unreachable!("Should not have been created with none or both fields"),
+            },
         }
     }
 }
@@ -138,7 +214,7 @@ impl DerefMut for Days {
 
 impl DaysInner {
     pub fn reset(&mut self) {
-        let _ = self.apply_both(CopyRing::reset, |(w, _)| w.reset());
+        let _ = self.apply(CopyRing::reset, |(w, _)| w.reset());
     }
 
     pub(self) const fn num_weekdays_since(start_weekday: i16, end_weekday: i16) -> u8 {
@@ -146,8 +222,13 @@ impl DaysInner {
         ((end_weekday + DAYS_IN_A_WEEK - start_weekday) % DAYS_IN_A_WEEK) as u8
     }
 
-    pub fn cache_mut(&mut self) -> Option<&mut Option<DayCache>> {
+    pub fn cache_mut(&mut self) -> Option<&mut DayCache> {
         self.apply_week(|(_, cache)| cache)
+            .and_then(|cache| cache.as_mut())
+    }
+
+    pub fn set_cache(&mut self, new_cache: DayCache) {
+        self.apply_week(|(_, cache)| *cache = Some(new_cache));
     }
 
     fn cache(&self) -> Option<&DayCache> {
@@ -159,7 +240,7 @@ impl DaysInner {
     /// copyring if no cache exists.
     pub fn last(&self) -> u8 {
         if let Some(cache) = self.cache() {
-            cache.last_month_day
+            cache.month_day
         } else {
             self.query_month(|month| month.peek_prev().unwrap())
                 .unwrap()
@@ -188,11 +269,7 @@ impl DaysInner {
         }
     }
 
-    pub fn query_both<'a: 'b, 'b, M, W, T, U>(
-        &'a self,
-        month_fn: M,
-        week_fn: W,
-    ) -> Response<T, U>
+    pub fn query<'a: 'b, 'b, M, W, T, U>(&'a self, month_fn: M, week_fn: W) -> Response<T, U>
     where
         M: FnOnce(&'b CronRing) -> T,
         W: FnOnce(&'b (CronRing, Option<DayCache>)) -> U,
@@ -217,11 +294,7 @@ impl DaysInner {
         }
     }
 
-    fn apply_both<'a: 'b, 'b, M, W, T, U>(
-        &'a mut self,
-        month_fn: M,
-        week_fn: W,
-    ) -> Response<T, U>
+    fn apply<'a: 'b, 'b, M, W, T, U>(&'a mut self, month_fn: M, week_fn: W) -> Response<T, U>
     where
         M: FnOnce(&'b mut CronRing) -> T,
         W: FnOnce(&'b mut (CronRing, Option<DayCache>)) -> U,
@@ -241,82 +314,67 @@ impl DaysInner {
         days_month: u8,
         days_week: u8,
         days_in_month: u8,
-    ) -> NextDay {
+    ) -> Response<Option<u8>, Option<(u8, u8)>> {
         self.reset();
-        let result = self.apply_both(
-            |month_ring| {
-                month_ring
-                    .binary_search_or_greater(&(days_month + time_overflow as u8))
-                    .filter(|&(day, overflow)| {
-                        !overflow && Self::check_for_end_of_month(day, days_in_month)
-                    })
-                    .map(|(day, _)| day)
-            },
-            |(week_ring, _)| {
-                week_ring
-                    .binary_search_or_greater(&(days_week + time_overflow as u8))
-                    .map(|(day, _)| day)
-                    .or_else(|| week_ring.next())
-                    .map(|day| {
-                        let day_of_month = days_month
-                            + DaysInner::num_weekdays_since(days_week.into(), day.into());
-                        let day_of_week = day;
-                        (day_of_month, day_of_week)
-                    })
-                    .filter(|&(day, _)| Self::check_for_end_of_month(day, days_in_month))
-            },
-        );
-        Self::handle_result_for_next_day(result)
+        let first_after_for_month = |month_ring: &mut CronRing| {
+            month_ring
+                .binary_search_or_greater(&(days_month + time_overflow as u8))
+                .filter(|&(day, overflow)| {
+                    !overflow && Self::check_for_end_of_month(day, days_in_month)
+                })
+                .map(|(day, _)| day)
+        };
+        let first_after_for_week = |(week_ring, _): &mut (CronRing, _)| {
+            week_ring
+                .binary_search_or_greater(&(days_week + time_overflow as u8))
+                .map(|(day, _)| {
+                    let day_of_month =
+                        days_month + DaysInner::num_weekdays_since(days_week.into(), day.into());
+                    let day_of_week = day;
+                    (day_of_month, day_of_week)
+                })
+                .filter(|&(day, _)| Self::check_for_end_of_month(day, days_in_month))
+        };
+        self.apply(first_after_for_month, first_after_for_week)
     }
 
-    pub fn next(&mut self, time_overflow: bool, days_in_month: u8) -> NextDay {
+    /// Returns the next days in the struct with an indication as to
+    /// which internal buffer provided which day. Unlike `first_after`,
+    /// however, this function assumes there was overflow, and will attempt
+    /// to rotate the internal buffers to their next items.
+    pub fn next(&mut self, days_in_month: u8) -> Response<Option<u8>, Option<(u8, u8)>> {
         let (month_overflow, week_overflow) = if let Some(cache) = self.cache() {
-            match cache.last_used {
-                LastUsed::Week => (false, time_overflow),
-                LastUsed::Month => (time_overflow, false),
-                LastUsed::Both => (time_overflow, time_overflow),
+            match cache.last {
+                LastUsed::Week => (false, true),
+                LastUsed::Month => (true, false),
+                LastUsed::Both => (true, true),
             }
         } else {
-            (time_overflow, false)
+            (true, false) // No cache means only days of the month
         };
-        let result = self.apply_both(
-            |month_ring| {
-                Some(super::next(month_ring, month_overflow))
-                    .filter(|&(day, overflow)| {
-                        !overflow && Self::check_for_end_of_month(day, days_in_month)
-                    })
-                    .map(|(day, _)| day)
-            },
-            |(week_ring, cache)| {
-                Some(super::next(week_ring, week_overflow))
-                    .map(|(day, _)| day)
-                    .or_else(|| week_ring.next())
-                    .map(|day| {
-                        let last_month_day = cache.as_ref().unwrap().last_month_day;
-                        let last_weekday = cache.as_ref().unwrap().last_weekday;
-                        let day_of_month = last_month_day
-                            + DaysInner::num_weekdays_since(last_weekday.into(), day.into());
-                        let day_of_week = day;
-                        (day_of_month, day_of_week)
-                    })
-                    .filter(|&(day, _)| {
-                        Self::check_for_end_of_month(
-                            day,
-                            cache.as_ref().unwrap().last_month_day,
-                        )
-                    })
-            },
-        );
-        Self::handle_result_for_next_day(result)
-    }
-
-    fn handle_result_for_next_day(result: Response<Option<u8>, Option<(u8, u8)>>) -> NextDay {
-        match result.0 {
-            (None, None) => unreachable!("Days should have one or both of the fields."),
-            (None, Some(week)) => NextDay::Week(week),
-            (Some(month), None) => NextDay::Month(month),
-            (Some(month), Some(week)) => NextDay::Both { month, week },
-        }
+        let next_from_month = |month_ring| {
+            Some(super::next(month_ring, month_overflow))
+                .filter(|&(day, overflow)| {
+                    !overflow && Self::check_for_end_of_month(day, days_in_month)
+                })
+                .map(|(day, _)| day)
+        };
+        let next_from_week = |(week_ring, cache): &mut (_, Option<DayCache>)| {
+            Some(super::next(week_ring, week_overflow))
+                .map(|(day, _)| {
+                    let cache = cache.as_ref().unwrap();
+                    let last_month_day = cache.month_day;
+                    let last_weekday = cache.weekday;
+                    let day_of_month = last_month_day
+                        + DaysInner::num_weekdays_since(last_weekday.into(), day.into());
+                    let day_of_week = day;
+                    (day_of_month, day_of_week)
+                })
+                .filter(|&(day, _)| {
+                    Self::check_for_end_of_month(day, cache.as_ref().unwrap().month_day)
+                })
+        };
+        self.apply(next_from_month, next_from_week)
     }
 
     fn check_for_end_of_month(day: u8, days_in_month: u8) -> bool {
@@ -339,8 +397,8 @@ impl Months {
         super::first_after(&mut self.0, false, month)
     }
 
-    pub fn next(&mut self, day_overflow: bool) -> (u8, bool) {
-        super::next(&mut self.0, day_overflow)
+    pub fn next(&mut self) -> (u8, bool) {
+        super::next(&mut self.0, true)
     }
 
     pub fn last(&self) -> u8 {

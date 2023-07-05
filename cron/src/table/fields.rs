@@ -14,7 +14,7 @@ fn next(ring: &mut CronRing, overflow: bool) -> (u8, bool) {
     if overflow {
         ring.checked_next().unwrap()
     } else {
-        (ring.peek_next().unwrap(), false)
+        (ring.peek_prev().unwrap(), false)
     }
 }
 
@@ -27,6 +27,7 @@ fn first_after(ring: &mut CronRing, overflow: bool, then: u8) -> (u8, bool) {
     if let Some(next) = found {
         (next, false)
     } else {
+        ring.reset();
         (ring.next().unwrap(), true)
     }
 }
@@ -101,7 +102,7 @@ impl Date {
             let (month, year_overflow) = if first_run {
                 self.months.first_after(starting_month)
             } else {
-                self.months.next(true)
+                self.months.next()
             };
             if let Some(year) = self.year_mut_checked() {
                 *year += year_overflow as u32;
@@ -191,79 +192,54 @@ impl Date {
                 new_days_week,
                 days_in_this_month,
             );
-            let next_day = match next_day {
-                date::NextDay::Week(next_day) => next_day.map(|(month, week)| {
-                    let cache = self.days.cache_mut().unwrap();
-                    *cache = Some(DayCache {
-                        last_month_day: month,
-                        last_weekday: week,
-                        last_used: LastUsed::Week,
-                    });
-                    month
-                }),
-                date::NextDay::Both {
-                    week: next_day_week,
-                    month: next_day_month,
-                } => {
-                    let cache = self.days.cache_mut().unwrap();
-                    let week_wins = |month, week| {
-                        Some(DayCache {
-                            last_month_day: month,
-                            last_weekday: week,
-                            last_used: LastUsed::Week,
+            let next_day = next_day
+                .inspect_week(|w| {
+                    if let Some(&(month_day, weekday)) = w.as_ref() {
+                        let year = self.year_unchecked();
+                        self.days.set_cache(DayCache {
+                            month_day,
+                            weekday,
+                            month,
+                            year,
+                            last: LastUsed::Week,
                         })
-                    };
-                    let month_wins = |month| {
-                        Some(DayCache {
-                            last_month_day: month,
-                            last_weekday: DaysInner::next_weekday_from_last(
-                                new_days_week as u32,
-                                (month - new_days_month) as u32,
-                            ),
-                            last_used: LastUsed::Month,
+                    }
+                })
+                .map_week(|d| d.map(|(day, _)| day))
+                .map(
+                    |m| m.map(|m| (m, LastUsed::Month)),
+                    |w| w.map(|w| (w, LastUsed::Week)),
+                )
+                .try_merge(|m, w| {
+                    date::Response::new(m, w)
+                        .try_merge(|m, w| match m.0.cmp(&w.0) {
+                            std::cmp::Ordering::Less => m,
+                            std::cmp::Ordering::Equal => (m.0, LastUsed::Both),
+                            std::cmp::Ordering::Greater => w,
                         })
-                    };
-                    let both_win = |month, week| {
-                        Some(DayCache {
-                            last_month_day: month,
-                            last_weekday: week,
-                            last_used: LastUsed::Both,
-                        })
-                    };
-                    let new_cache = match (next_day_month, next_day_week) {
-                        (None, None) => None,
-                        (None, Some((next_of_month, next_of_week))) => {
-                            week_wins(next_of_month, next_of_week)
-                        }
-                        (Some(next), None) => month_wins(next),
-                        (Some(next_from_month_ring), Some((next_from_week_ring, next_weekday))) => {
-                            match next_from_month_ring.cmp(&next_from_week_ring) {
-                                std::cmp::Ordering::Less => month_wins(next_from_month_ring),
-                                std::cmp::Ordering::Equal => {
-                                    both_win(next_from_month_ring, next_weekday)
-                                }
-                                std::cmp::Ordering::Greater => {
-                                    week_wins(next_from_week_ring, next_weekday)
-                                }
-                            }
-                        }
-                    };
-                    let next_day = new_cache.as_ref().map(|c| c.last_month_day);
-                    *cache = new_cache;
-                    next_day
-                }
-                date::NextDay::Month(next_day) => next_day,
-            };
-            if let Some(next) = next_day {
+                        .or()
+                })
+                .or()
+                .expect("at least one field (month or week) to exist");
+
+            if let Some((next, winner)) = next_day {
                 result = Some(Cache {
                     last_day: next,
                     last_month: month,
                     last_year: self.year_unchecked(),
                 });
+                // Note: It is possible, during all this hacking together code, that
+                // I forget to set the cache earlier, but because of how the cache
+                // is implemented right now, we can't check if it exists at the moment.
+                // So this serves as a reminder that if something doesn't work, check if
+                // the cache was set first.
+                if let Some(cache) = self.days.cache_mut() {
+                    cache.last = winner;
+                }
                 found = true;
             } else {
                 first_run = false;
-            }
+            };
         }
 
         result.and_then(|d| {
@@ -307,15 +283,62 @@ impl Date {
     /// Will panic if called before `Date::first_after`, since the
     /// `year` will not have been set, and this function uses that
     /// field.
-    pub fn next(&mut self, mut time_overflow: bool) -> Option<NaiveDate> {
-        // First, grab the current day, month, and year
-        // We can get the weekday from our day cache, if necessary.
+    pub fn next(&mut self, time_overflow: bool) -> Option<NaiveDate> {
+        // The actual first: Check if there's overflow.
+        // If there isn't, then we just return the current date again,
+        // No calculations necessary.
+        let cache = Cache {
+            last_day: self.days.last(),
+            last_month: self.months.last(),
+            last_year: self.year_unchecked(),
+        };
+        let result = if time_overflow {
+            let mut found = false;
+            let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
+            let mut result = None;
+            while !found && !self.at_year_limit(cache.last_year) {
+                // Get the next day (and weekday!)
 
-        let days_month = self.days.last();
-        let month = self.months.last();
-        let year = self.year_unchecked();
+                // Check if those days are within bounds.
+                // If both days are not, then we need
+                // to advance the month ring, then
+                // recalculate the next weekday and
+                // use the first_after function like
+                // we did last time.
 
-        todo!()
+                // If only the weekday was outta bounds,
+                // then we calculate that weekday's month-day,
+                // month, and year. But also, in this case
+                // the month-ring wins, and we go with that
+                // date.
+                // However, in this case, we gotta look at
+                // the next time we calculate the dates.
+                //
+                // Next time, if we need to calculate
+                // the next weekday because of
+                // out-of-bounds-ness, then we need
+                // to use the cached data from our
+                // weekday's last day.
+                // That way, we actually shouldn't have
+                // to calculate the weekday for the
+                // month-ring at all.
+                //
+                // [7/2] I'm going to try implementing
+                // this for the first_after function
+                // first, then try it here if it works.
+            }
+            result
+        } else {
+            Some(cache)
+        };
+
+        result.and_then(|date| {
+            NaiveDate::from_ymd_opt(
+                date.last_year as i32,
+                date.last_month as u32,
+                date.last_day as u32,
+            )
+        })
     }
 
     /// Returns the current year.
@@ -385,18 +408,14 @@ impl DateBuilder {
         };
         let months = self.months.take().ok_or(Error::MissingField)?;
 
-        if months.is_empty()
-            || days
-                .query_both(CopyRing::is_empty, |(w, _)| w.is_empty())
-                .any()
-        {
+        if months.is_empty() || days.query(CopyRing::is_empty, |(w, _)| w.is_empty()).any() {
             return Err(Error::EmptyRing);
         }
 
         if months.first().unwrap() < 1
             || months.last().unwrap() > 31
             || days
-                .query_both(
+                .query(
                     |m| m.first().unwrap() < 1 || m.last().unwrap() > 31,
                     |(w, _)| w.last().unwrap() >= 7,
                 )
