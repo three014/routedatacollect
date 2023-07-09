@@ -11,7 +11,36 @@ use std::{
 mod job_internal {
     use crate::{AsyncFn, JobId, Limit};
     use chrono::{DateTime, TimeZone, Utc};
-    use cron::Schedule;
+    use cron::{OwnedScheduleIterator, Schedule};
+    use std::iter::{Take, TakeWhile};
+
+    enum ScheduleKind<T>
+    where
+        T: TimeZone + Send,
+        T::Offset: Send,
+    {
+        Infinite(OwnedScheduleIterator<T>),
+        Finite(Take<OwnedScheduleIterator<T>>),
+        Condition(
+            TakeWhile<OwnedScheduleIterator<T>, Box<dyn Fn(&DateTime<T>) -> bool + Send + 'static>>,
+        ),
+    }
+
+    impl<T> Iterator for ScheduleKind<T>
+    where
+        T: TimeZone + Send,
+        T::Offset: Send,
+    {
+        type Item = DateTime<T>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self {
+                ScheduleKind::Infinite(i) => i.next(),
+                ScheduleKind::Finite(f) => f.next(),
+                ScheduleKind::Condition(c) => c.next(),
+            }
+        }
+    }
 
     /// The Job item itself. Contains the async function/closure
     /// and the schedule for when this job should be executed. Interprets
@@ -24,7 +53,7 @@ mod job_internal {
     {
         id: JobId,
         next_exec_time: Option<DateTime<T>>,
-        schedule: Box<dyn Iterator<Item = DateTime<T>> + Send>,
+        schedule: ScheduleKind<T>,
         command: Box<dyn AsyncFn + Send + 'static>,
     }
 
@@ -41,22 +70,27 @@ mod job_internal {
             command: C,
             schedule: Schedule,
             timezone: T,
-            limit: Limit,
+            limit: Option<Limit>,
         ) -> Self {
             let mut schedule = schedule.upcoming_owned(timezone);
             Self {
                 id,
                 next_exec_time: schedule.next(),
                 command: Box::new(command),
-                schedule: match limit {
-                    Limit::None => Box::new(schedule),
-                    Limit::NumTimes(num_times) => {
-                        Box::new(schedule.take(num_times.checked_sub(1).unwrap_or_default()))
+                schedule: if let Some(limit) = limit {
+                    match limit {
+                        Limit::NumTimes(num_times) => ScheduleKind::Finite(
+                            schedule.take(num_times.checked_sub(1).unwrap_or_default()),
+                        ),
+                        Limit::EndDate(end_date) => ScheduleKind::Condition(schedule.take_while(
+                            Box::new(move |date_time| {
+                                date_time.with_timezone(&Utc).timestamp()
+                                    < Utc.from_local_datetime(&end_date).unwrap().timestamp()
+                            }),
+                        )),
                     }
-                    Limit::EndDate(end_date) => Box::new(schedule.take_while(move |date_time| {
-                        date_time.with_timezone(&Utc).timestamp()
-                            < Utc.from_local_datetime(&end_date).unwrap().timestamp()
-                    })),
+                } else {
+                    ScheduleKind::Infinite(schedule)
                 },
             }
         }
@@ -115,7 +149,7 @@ mod job_internal {
         T::Offset: Send,
     {
         fn call(&self) -> futures::future::BoxFuture<'static, crate::Result> {
-            self.command.call()
+            self.command.as_ref().call()
         }
     }
 
@@ -173,7 +207,7 @@ mod job_internal {
                 || async { Ok(()) },
                 "00 * * * * *".parse().unwrap(),
                 Utc,
-                Limit::NumTimes(0),
+                Some(Limit::NumTimes(0)),
             );
             assert_eq!(id, job.id());
         }
@@ -185,7 +219,7 @@ mod job_internal {
                 || async { Ok(()) },
                 "00 * * * * *".parse().unwrap(),
                 Utc,
-                Limit::NumTimes(0),
+                Some(Limit::NumTimes(0)),
             );
 
             let job2 = Job::with_limit(
@@ -193,7 +227,7 @@ mod job_internal {
                 || async { Ok(()) },
                 "00 * * * * *".parse().unwrap(),
                 Utc,
-                Limit::NumTimes(0),
+                Some(Limit::NumTimes(0)),
             );
 
             job1.advance_schedule();
@@ -208,7 +242,7 @@ mod job_internal {
                 || async { Ok(()) },
                 "00 * * * * *".parse().unwrap(),
                 Utc,
-                Limit::NumTimes(3),
+                Some(Limit::NumTimes(3)),
             );
 
             let mut later_job = Job::with_limit(
@@ -216,7 +250,7 @@ mod job_internal {
                 || async { Ok(()) },
                 "00 * * * * *".parse().unwrap(),
                 Utc,
-                Limit::NumTimes(3),
+                Some(Limit::NumTimes(3)),
             );
 
             sooner_job.advance_schedule();
@@ -299,12 +333,12 @@ where
         }
     }
 
-    pub fn schedule_with_limit<C>(
+    pub fn schedule<C>(
         &mut self,
         command: C,
         schedule: Schedule,
         timezone: T,
-        limit: Limit,
+        limit: Option<Limit>,
     ) -> JobId
     where
         C: AsyncFn + Send + 'static,

@@ -15,7 +15,7 @@ fn main() {
             Ok(())
         },
         schedule,
-        job_scheduler::Limit::NumTimes(5),
+        Some(job_scheduler::Limit::NumTimes(5)),
     );
 
     s.start();
@@ -30,7 +30,7 @@ fn main() {
             Ok(())
         },
         "45 * * * * *".parse().unwrap(),
-        job_scheduler::Limit::NumTimes(2),
+        Some(job_scheduler::Limit::NumTimes(2)),
     );
 
     let mut ids = Vec::new();
@@ -42,7 +42,7 @@ fn main() {
                 Ok(())
             },
             "20 * * * * *".parse().unwrap(),
-            job_scheduler::Limit::NumTimes(2),
+            Some(job_scheduler::Limit::NumTimes(2)),
         ));
     }
     thread::sleep(Duration::from_secs(180));

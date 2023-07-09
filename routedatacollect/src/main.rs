@@ -44,7 +44,7 @@ async fn start() -> GeneralResult {
 
     let mut scheduler = Scheduler::with_timezone(chrono_tz::America::Chicago);
     let every_day_starting_from_school =
-        "00 16 13,14,15,16,17,18 * * Mon,Tue,Wed,Thu,Fri".parse::<cron::Schedule>()?;
+        "00 16 13,14,15,16,17,18 * * Mon,Tue,Wed,Thu,Fri".parse()?;
 
     let channel = Channel::from_static(SERVER_ADDR)
         .timeout(Duration::from_secs(2))
@@ -161,7 +161,7 @@ async fn start() -> GeneralResult {
     scheduler.add_job(
         job,
         every_day_starting_from_school,
-        job_scheduler::Limit::EndDate(october_15th),
+        Some(job_scheduler::Limit::EndDate(october_15th)),
     );
 
     // Shutdown listeners

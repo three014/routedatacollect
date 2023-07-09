@@ -11,7 +11,6 @@ pub type Result =
 pub type JobId = u32;
 
 pub enum Limit {
-    None,
     NumTimes(usize),
     EndDate(NaiveDateTime),
 }
@@ -62,5 +61,52 @@ mod receiver {
                 self.rx.try_recv()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::AsyncFn;
+
+    #[allow(unused)]
+    #[test]
+    fn foo() {
+        #[tokio::main]
+        async fn bar() {
+            let mut g = "hello".to_owned();
+
+            let a = move || async move {
+                g.push_str(" world!");
+                println!("{g}");
+                Ok(())
+            };
+
+            let a2 = move || async move {
+                println!("This is the second future type!");
+
+                Ok(())
+            };
+
+            struct Hmm {
+                f: Box<dyn AsyncFn>,
+            }
+
+            impl AsyncFn for Hmm {
+                fn call(&self) -> futures::future::BoxFuture<'static, crate::Result> {
+                    self.f.as_ref().call()
+                }
+            }
+
+            let b = Hmm { f: Box::new(a) };
+            let c = Hmm { f: Box::new(a2) };
+
+            let v = vec![b, c];
+
+            v[0].call().await;
+            v[0].call().await;
+            v[1].call().await;
+        }
+
+        bar();
     }
 }

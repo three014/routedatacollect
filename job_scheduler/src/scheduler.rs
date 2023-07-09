@@ -330,25 +330,21 @@ where
         &mut self,
         command: C,
         schedule: cron::Schedule,
-        limit_num_execs: crate::Limit,
+        limit_num_execs: Option<crate::Limit>,
     ) -> JobId
     where
         C: AsyncFn + Send + 'static,
     {
         let (job_id, should_stop_service) = match self.job_board.lock() {
             Ok(mut jobs) => (
-                jobs.schedule_with_limit(command, schedule, self.timezone, limit_num_execs),
+                jobs.schedule(command, schedule, self.timezone, limit_num_execs),
                 false,
             ),
             Err(mut e) => {
                 log::error!(target: "scheduler::Scheduler::add_job", "{e}. Service stopped. Will still attempt to add job to schedule.");
                 (
-                    e.get_mut().schedule_with_limit(
-                        command,
-                        schedule,
-                        self.timezone,
-                        limit_num_execs,
-                    ),
+                    e.get_mut()
+                        .schedule(command, schedule, self.timezone, limit_num_execs),
                     true,
                 )
             }
