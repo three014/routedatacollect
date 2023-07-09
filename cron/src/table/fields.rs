@@ -48,9 +48,9 @@ pub struct Date {
 
 #[derive(Clone, Debug, Default)]
 struct Cache {
-    last_day: u8,
-    last_month: u8,
-    last_year: u32,
+    day: u8,
+    month: u8,
+    year: u32,
 }
 
 #[derive(Default, Debug)]
@@ -87,39 +87,39 @@ impl Date {
     pub fn first_after(
         &mut self,
         mut time_overflow: bool,
-        days_month: u8,
-        days_week: u8,
-        starting_month: u8,
-        starting_year: u32,
+        start_days_month: u8,
+        start_days_week: u8,
+        start_month: u8,
+        start_year: u32,
     ) -> Option<NaiveDate> {
         self.months.reset();
         let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
         let mut found = false;
         let mut first_run = true;
         let mut result = None;
-        while !found && !self.at_year_limit(starting_year) {
+        while !found && !self.at_year_limit(start_year) {
             // Step 1: Set the months to the first available month
             let (month, year_overflow) = if first_run {
-                self.months.first_after(starting_month)
+                self.months.first_after(start_month)
             } else {
                 self.months.next()
             };
             if let Some(year) = self.year_mut_checked() {
                 *year += year_overflow as u32;
             } else {
-                self.set_year(starting_year + year_overflow as u32);
+                self.set_year(start_year + year_overflow as u32);
             }
 
             // Step 2: If the next month and year are not equal to the given values, then
             //         Set days_month to 1, and calculate the days_week from the
             //         `month`/`days_month`/`self.year` value.
-            let mut new_days_month = days_month;
-            let mut new_days_week = days_week;
-            if month != starting_month || self.year_unchecked() != starting_year {
+            let mut start_days_month = start_days_month;
+            let mut start_days_week = start_days_week;
+            if month != start_month || self.year_unchecked() != start_year {
                 // Calculate the number of days that have passed from the
                 // last day/month/year.
                 let mut days_of_the_month = CopyRing::borrowed(&months_to_days_no_leap);
-                days_of_the_month.rotate_left(starting_month.into()); // Puts us on the month after, not the current month.
+                days_of_the_month.rotate_left(start_month.into()); // Puts us on the month after, not the current month.
 
                 // We want to calculate the number of days from the open range of the first month
                 // to the last month. But, we have to account for the fact that the first month and
@@ -133,8 +133,8 @@ impl Date {
                 let months_passed_exclusive = Self::calc_months_passed_exclusive(
                     self.year_unchecked(),
                     month,
-                    starting_year,
-                    starting_month,
+                    start_year,
+                    start_month,
                 );
 
                 // Now, we calculate the number of days that have passed from the open
@@ -147,28 +147,24 @@ impl Date {
                 // Then, we calculate the leap years separately, but still only considering
                 // the years within the open range. Because of that, this might not enter
                 // the loop at all if the years are the same. We'll come back to this later.
-                let leap_days = ((starting_year + 1)..self.year_unchecked())
+                let leap_days = ((start_year + 1)..self.year_unchecked())
                     .filter(|&year| crate::is_leap_year(year))
                     .count();
 
                 let first_month_days = {
-                    let mut days_in_this_month =
-                        months_to_days_no_leap[(starting_month - 1) as usize];
-                    if crate::is_leap_year(starting_year) && starting_month == 2 {
-                        days_in_this_month += 1;
-                    }
-                    days_in_this_month - days_month + 1
+                    let days_in_this_month = Self::days_in_month(start_month, start_year);
+                    days_in_this_month - start_days_month + 1
                 };
                 let days_until_first_of_next_month =
                     sum_days + leap_days as u32 + first_month_days as u32;
 
                 // With the number of days until the first of the month, we can now calculate the
                 // weekday, and finally set the days of the month and week.
-                new_days_week = DaysInner::next_weekday_from_last(
-                    days_week as u32,
+                start_days_week = DaysInner::next_weekday_from_last(
+                    start_days_week as u32,
                     days_until_first_of_next_month,
                 );
-                new_days_month = 1;
+                start_days_month = 1;
 
                 // Also, we can set time_overflow to false, regardless of what it was before,
                 // because we've advanced the month and year so that any day we find will
@@ -179,17 +175,11 @@ impl Date {
             // Step 3: Find the next available day for each type.
             //         The result will be based on which types the
             //         Days struct has.
-            let days_in_this_month = {
-                let mut days_in_this_month = months_to_days_no_leap[(month - 1) as usize];
-                if crate::is_leap_year(self.year_unchecked()) && month == 2 {
-                    days_in_this_month += 1;
-                }
-                days_in_this_month
-            };
+            let days_in_this_month = Self::days_in_month(month, self.year_unchecked());
             let next_day = self.days.first_after(
                 time_overflow,
-                new_days_month,
-                new_days_week,
+                start_days_month,
+                start_days_week,
                 days_in_this_month,
             );
             let next_day = next_day
@@ -224,9 +214,9 @@ impl Date {
 
             if let Some((next, winner)) = next_day {
                 result = Some(Cache {
-                    last_day: next,
-                    last_month: month,
-                    last_year: self.year_unchecked(),
+                    day: next,
+                    month,
+                    year: self.year_unchecked(),
                 });
                 // Note: It is possible, during all this hacking together code, that
                 // I forget to set the cache earlier, but because of how the cache
@@ -242,9 +232,16 @@ impl Date {
             };
         }
 
-        result.and_then(|d| {
-            NaiveDate::from_ymd_opt(d.last_year as i32, d.last_month as u32, d.last_day as u32)
-        })
+        result.and_then(|d| NaiveDate::from_ymd_opt(d.year as i32, d.month as u32, d.day as u32))
+    }
+
+    fn days_in_month(month: u8, year: u32) -> u8 {
+        let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
+        let mut days_in_this_month = months_to_days_no_leap[(month - 1) as usize];
+        if month == 2 && crate::is_leap_year(year) {
+            days_in_this_month += 1;
+        }
+        days_in_this_month
     }
 
     fn calc_months_passed_exclusive(
@@ -288,15 +285,14 @@ impl Date {
         // If there isn't, then we just return the current date again,
         // No calculations necessary.
         let cache = Cache {
-            last_day: self.days.last(),
-            last_month: self.months.last(),
-            last_year: self.year_unchecked(),
+            day: self.days.last(),
+            month: self.months.last(),
+            year: self.year_unchecked(),
         };
         let result = if time_overflow {
             let mut found = false;
-            let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
             let mut result = None;
-            while !found && !self.at_year_limit(cache.last_year) {
+            while !found && !self.at_year_limit(cache.year) {
                 // Get the next day (and weekday!)
 
                 // Check if those days are within bounds.
@@ -326,6 +322,25 @@ impl Date {
                 // [7/2] I'm going to try implementing
                 // this for the first_after function
                 // first, then try it here if it works.
+
+                let next_day = self.days.next(Self::days_in_month(cache.month, cache.year));
+                let _next_day = next_day
+                    .inspect_week(|w| {
+                        if let Some(&(month_day, weekday)) = w.as_ref() {
+                            self.days.set_cache(DayCache {
+                                month_day,
+                                weekday,
+                                month: cache.month,
+                                year: cache.year,
+                                last: LastUsed::Week,
+                            })
+                        }
+                    })
+                    .map_week(|w| w.map(|(day, _)| day))
+                    .map(
+                        |m| m.map(|m| (m, LastUsed::Month)),
+                        |w| w.map(|w| (w, LastUsed::Week)),
+                    );
             }
             result
         } else {
@@ -333,11 +348,7 @@ impl Date {
         };
 
         result.and_then(|date| {
-            NaiveDate::from_ymd_opt(
-                date.last_year as i32,
-                date.last_month as u32,
-                date.last_day as u32,
-            )
+            NaiveDate::from_ymd_opt(date.year as i32, date.month as u32, date.day as u32)
         })
     }
 
@@ -522,7 +533,7 @@ mod test {
                     6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 29,
                     30,
                 ])),
-                CronRing::arc_with_size(Arc::new([2, 5])),
+                CronRing::arc_with_size(Arc::new([3, 5])),
             ),
             months: Months::new(CronRing::borrowed_with_size(&crate::DEFAULT_MONTHS)),
             year: None,
@@ -591,9 +602,9 @@ mod test {
         };
         let then = Utc::now();
         for _ in 0..1000000 {
-            let a = d.first_after(true, 30, 6, 12, 2024);
+            let _a = d.first_after(true, 30, 6, 12, 2024);
         }
         let now = Utc::now();
-        println!("{:?}", now - then);
+        println!("Diff: {:?}", now - then);
     }
 }

@@ -48,8 +48,8 @@ pub struct DayCache {
     pub month_day: u8,
     pub weekday: u8,
     pub month: u8,
-    pub last: LastUsed,
     pub year: u32,
+    pub last: LastUsed,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -58,19 +58,6 @@ pub enum LastUsed {
     Week,
     Month,
     Both,
-}
-
-#[derive(Clone, Debug)]
-pub enum NextDay {
-    /// The next day of the month, from 1-31
-    /// along with the next weekday, from 0-6
-    Week(Option<(u8, u8)>),
-    Both {
-        month: Option<u8>,
-        week: Option<(u8, u8)>,
-    },
-    /// The next day of the month, from 1-31
-    Month(Option<u8>),
 }
 
 #[derive(Clone, Debug)]
@@ -320,7 +307,7 @@ impl DaysInner {
             month_ring
                 .binary_search_or_greater(&(days_month + time_overflow as u8))
                 .filter(|&(day, overflow)| {
-                    !overflow && Self::check_for_end_of_month(day, days_in_month)
+                    !overflow && Self::is_within_end_of_month(day, days_in_month)
                 })
                 .map(|(day, _)| day)
         };
@@ -333,7 +320,7 @@ impl DaysInner {
                     let day_of_week = day;
                     (day_of_month, day_of_week)
                 })
-                .filter(|&(day, _)| Self::check_for_end_of_month(day, days_in_month))
+                .filter(|&(day, _)| Self::is_within_end_of_month(day, days_in_month))
         };
         self.apply(first_after_for_month, first_after_for_week)
     }
@@ -355,14 +342,14 @@ impl DaysInner {
         let next_from_month = |month_ring| {
             Some(super::next(month_ring, month_overflow))
                 .filter(|&(day, overflow)| {
-                    !overflow && Self::check_for_end_of_month(day, days_in_month)
+                    !overflow && Self::is_within_end_of_month(day, days_in_month)
                 })
                 .map(|(day, _)| day)
         };
         let next_from_week = |(week_ring, cache): &mut (_, Option<DayCache>)| {
+            let cache = cache.as_ref().unwrap();
             Some(super::next(week_ring, week_overflow))
                 .map(|(day, _)| {
-                    let cache = cache.as_ref().unwrap();
                     let last_month_day = cache.month_day;
                     let last_weekday = cache.weekday;
                     let day_of_month = last_month_day
@@ -371,13 +358,13 @@ impl DaysInner {
                     (day_of_month, day_of_week)
                 })
                 .filter(|&(day, _)| {
-                    Self::check_for_end_of_month(day, cache.as_ref().unwrap().month_day)
+                    Self::is_within_end_of_month(day, cache.month_day)
                 })
         };
         self.apply(next_from_month, next_from_week)
     }
 
-    fn check_for_end_of_month(day: u8, days_in_month: u8) -> bool {
+    fn is_within_end_of_month(day: u8, days_in_month: u8) -> bool {
         day <= days_in_month
     }
 
