@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::google::maps::routing::v2::{
     waypoint::LocationType, ComputeRoutesRequest, ComputeRoutesResponse, RouteTravelMode,
     RoutingPreference, Units, Waypoint,
@@ -47,27 +49,27 @@ impl<'de> Deserialize<'de> for DateTimeWrapper {
 /// A simplified version of the `ComputeRoutesRequest` struct used
 /// for Google's Routes API.
 pub struct RouteDataRequest {
-    pub origin: Location,
-    pub destination: Location,
-    pub intermediates: Vec<Location>,
+    pub origin: &'static Location,
+    pub destination: &'static Location,
+    pub intermediates: Vec<&'static Location>,
 }
 
 impl From<RouteDataRequest> for ComputeRoutesRequest {
     fn from(value: RouteDataRequest) -> ComputeRoutesRequest {
         ComputeRoutesRequest {
             origin: Some(Waypoint {
-                location_type: Some(LocationType::PlaceId(value.origin.place_id)),
+                location_type: Some(LocationType::PlaceId(value.origin.place_id.to_string())),
                 ..Default::default()
             }),
             destination: Some(Waypoint {
-                location_type: Some(LocationType::PlaceId(value.destination.place_id)),
+                location_type: Some(LocationType::PlaceId(value.destination.place_id.to_string())),
                 ..Default::default()
             }),
             intermediates: value
                 .intermediates
                 .into_iter()
                 .map(|location| Waypoint {
-                    location_type: Some(LocationType::PlaceId(location.place_id)),
+                    location_type: Some(LocationType::PlaceId(location.place_id.to_string())),
                     ..Default::default()
                 })
                 .collect(),
@@ -115,6 +117,6 @@ impl SerializableRouteResponse {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Location {
-    pub address: String,
-    pub place_id: String,
+    pub address: Cow<'static, str>,
+    pub place_id: Cow<'static, str>,
 }

@@ -1,6 +1,8 @@
 use crate::{table::CronRing, CopyRing};
 use std::ops::{Deref, DerefMut};
 
+use super::Date;
+
 #[derive(Clone, Debug)]
 pub enum DaysInner {
     Both {
@@ -236,7 +238,7 @@ impl DaysInner {
 
     pub fn query_week<'a: 'b, 'b, W, U>(&'a self, week_fn: W) -> Option<U>
     where
-        W: FnOnce(&'b (CronRing, Option<DayCache>)) -> U,
+        W: Fn(&'b (CronRing, Option<DayCache>)) -> U,
     {
         match self {
             DaysInner::Both { month: _, week } => Some(week_fn(week)),
@@ -247,7 +249,7 @@ impl DaysInner {
 
     pub fn query_month<'a: 'b, 'b, M, U>(&'a self, month_fn: M) -> Option<U>
     where
-        M: FnOnce(&'b CronRing) -> U,
+        M: Fn(&'b CronRing) -> U,
     {
         match self {
             DaysInner::Both { month, week: _ } => Some(month_fn(month)),
@@ -258,8 +260,8 @@ impl DaysInner {
 
     pub fn query<'a: 'b, 'b, M, W, T, U>(&'a self, month_fn: M, week_fn: W) -> Response<T, U>
     where
-        M: FnOnce(&'b CronRing) -> T,
-        W: FnOnce(&'b (CronRing, Option<DayCache>)) -> U,
+        M: Fn(&'b CronRing) -> T,
+        W: Fn(&'b (CronRing, Option<DayCache>)) -> U,
     {
         match self {
             DaysInner::Both { month, week } => {
@@ -283,8 +285,8 @@ impl DaysInner {
 
     fn apply<'a: 'b, 'b, M, W, T, U>(&'a mut self, month_fn: M, week_fn: W) -> Response<T, U>
     where
-        M: FnOnce(&'b mut CronRing) -> T,
-        W: FnOnce(&'b mut (CronRing, Option<DayCache>)) -> U,
+        M: Fn(&'b mut CronRing) -> T,
+        W: Fn(&'b mut (CronRing, Option<DayCache>)) -> U,
     {
         match self {
             DaysInner::Both { month, week } => {
@@ -300,9 +302,11 @@ impl DaysInner {
         time_overflow: bool,
         days_month: u8,
         days_week: u8,
-        days_in_month: u8,
-    ) -> Response<Option<u8>, Option<(u8, u8)>> {
+        month: u8,
+        year: u32,
+    ) -> Option<u8> {
         self.reset();
+        let days_in_month = Date::days_in_month(month, year);
         let first_after_for_month = |month_ring: &mut CronRing| {
             month_ring
                 .binary_search_or_greater(&(days_month + time_overflow as u8))
@@ -320,9 +324,79 @@ impl DaysInner {
                     let day_of_week = day;
                     (day_of_month, day_of_week)
                 })
-                .filter(|&(day, _)| Self::is_within_end_of_month(day, days_in_month))
         };
         self.apply(first_after_for_month, first_after_for_week)
+            .inspect_week(|&weekday| {
+                self.set_cache(Self::compute_cache(weekday.unwrap(), month, year))
+            })
+            .map_week(|weekday| {
+                weekday
+                    .map(|(day, _)| day)
+                    .filter(|&day| Self::is_within_end_of_month(day, days_in_month))
+            })
+            .map(
+                |month_day| month_day.map(|day| (day, LastUsed::Month)),
+                |weekday| weekday.map(|day| (day, LastUsed::Week)),
+            )
+            .try_merge(Self::decide_field)
+            .or()
+            .expect("at least one field (month or week) to exist")
+            .map(|(day, last_used)| {
+                if let Some(cache) = self.cache_mut() {
+                    cache.last = last_used;
+                }
+                day
+            })
+    }
+
+    fn decide_field(
+        month_opt: Option<(u8, LastUsed)>,
+        week_opt: Option<(u8, LastUsed)>,
+    ) -> Option<(u8, LastUsed)> {
+        Response::new(month_opt, week_opt)
+            .try_merge(|month_opt, week_opt| {
+                let (month_day, _) = month_opt;
+                let (weekday, _) = week_opt;
+                match month_day.cmp(&weekday) {
+                    std::cmp::Ordering::Less => month_opt,
+                    std::cmp::Ordering::Equal => (month_day, LastUsed::Both),
+                    std::cmp::Ordering::Greater => week_opt,
+                }
+            })
+            .or()
+    }
+
+    fn compute_cache(day: (u8, u8), month: u8, year: u32) -> DayCache {
+        let days_in_month = Date::days_in_month(month, year);
+        let (month_day, weekday) = day;
+        if month_day > days_in_month {
+            // Overflow
+            let new_day = month - days_in_month;
+            let (new_month, month_overflow) = {
+                let new_month = month + 1;
+                if new_month > 12 {
+                    (1, true)
+                } else {
+                    (new_month, false)
+                }
+            };
+            let new_year = year + month_overflow as u32;
+            DayCache {
+                month_day: new_day,
+                weekday,
+                month: new_month,
+                year: new_year,
+                last: LastUsed::Week,
+            }
+        } else {
+            DayCache {
+                month_day,
+                weekday,
+                month,
+                year,
+                last: LastUsed::Week,
+            }
+        }
     }
 
     /// Returns the next days in the struct with an indication as to
@@ -357,9 +431,7 @@ impl DaysInner {
                     let day_of_week = day;
                     (day_of_month, day_of_week)
                 })
-                .filter(|&(day, _)| {
-                    Self::is_within_end_of_month(day, cache.month_day)
-                })
+                .filter(|&(day, _)| Self::is_within_end_of_month(day, days_in_month))
         };
         self.apply(next_from_month, next_from_week)
     }

@@ -1,4 +1,4 @@
-pub use self::cache::WaypointCollection;
+pub use self::cache::WAYPOINT_CACHE;
 pub use self::data_types::{Location, RouteDataRequest, SerializableRouteResponse};
 use self::{
     api_interceptor::GoogleRoutesApiInterceptor,
@@ -28,10 +28,10 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::SerializeFailed(ser) => writeln!(f, "{}", ser),
-            Error::DbNotConnected(no_conn) => writeln!(f, "{}", no_conn),
-            Error::Db(db) => writeln!(f, "{}", db),
-            Error::Rpc(rpc) => writeln!(f, "{}", rpc),
+            Error::SerializeFailed(ser) => write!(f, "{}", ser),
+            Error::DbNotConnected(no_conn) => write!(f, "{}", no_conn),
+            Error::Db(db) => write!(f, "{}", db),
+            Error::Rpc(rpc) => write!(f, "{}", rpc),
         }
     }
 }

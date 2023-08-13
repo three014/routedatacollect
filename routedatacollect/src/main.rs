@@ -1,6 +1,6 @@
 use crate::server::GeneralResult;
 use chrono::NaiveDate;
-use job_scheduler::Scheduler;
+use job_scheduler::{Limit, Scheduler};
 use server::{RouteDataService, Settings};
 use std::{io::Write, time::Duration};
 use tokio::sync::OnceCell;
@@ -61,29 +61,29 @@ async fn start() -> GeneralResult {
     .await?;
 
     let job = move || async move {
-        use crate::server::{RouteDataRequest, WaypointCollection};
+        use crate::server::{RouteDataRequest, WAYPOINT_CACHE};
 
-        let places = Box::new(WaypointCollection::new());
+        let places = &WAYPOINT_CACHE;
 
         // Create request from Utsa to Heb
         // Send request, get response
         // Serialize into json, save to database
         // Wait until _:43pm
         let req = RouteDataRequest {
-            origin: places.one_utsa_circle().clone(),
-            destination: places.fm78_heb().clone(),
+            origin: places.one_utsa_circle(),
+            destination: places.fm78_heb(),
             intermediates: vec![
-                places.crossroads_park_and_ride().clone(),
-                places.martin_opposite_leona().clone(),
-                places.via_centro_plaza().clone(),
-                places.utsa_downtown_campus().clone(),
-                places.utsa_san_pedro().clone(),
-                places.grand_hyatt().clone(),
-                places.randolph_park_and_ride().clone(),
-                places.walzem_and_mordred().clone(),
-                places.midcrown_ed_white().clone(),
-                places.castle_cross_and_castle_hunt().clone(),
-                places.train_tracks_on_rittiman_rd().clone(),
+                places.crossroads_park_and_ride(),
+                places.martin_opposite_leona(),
+                places.via_centro_plaza(),
+                places.utsa_downtown_campus(),
+                places.utsa_san_pedro(),
+                places.grand_hyatt(),
+                places.randolph_park_and_ride(),
+                places.walzem_and_mordred(),
+                places.midcrown_ed_white(),
+                places.castle_cross_and_castle_hunt(),
+                places.train_tracks_on_rittiman_rd(),
             ],
         };
 
@@ -97,18 +97,18 @@ async fn start() -> GeneralResult {
         // Serialize into json, save to database
         // Wait until ++_:25pm
         let req = RouteDataRequest {
-            origin: places.martin_opposite_leona().clone(),
-            destination: places.fm78_heb().clone(),
+            origin: places.martin_opposite_leona(),
+            destination: places.fm78_heb(),
             intermediates: vec![
-                places.via_centro_plaza().clone(),
-                places.utsa_downtown_campus().clone(),
-                places.utsa_san_pedro().clone(),
-                places.grand_hyatt().clone(),
-                places.randolph_park_and_ride().clone(),
-                places.walzem_and_mordred().clone(),
-                places.midcrown_ed_white().clone(),
-                places.castle_cross_and_castle_hunt().clone(),
-                places.train_tracks_on_rittiman_rd().clone(),
+                places.via_centro_plaza(),
+                places.utsa_downtown_campus(),
+                places.utsa_san_pedro(),
+                places.grand_hyatt(),
+                places.randolph_park_and_ride(),
+                places.walzem_and_mordred(),
+                places.midcrown_ed_white(),
+                places.castle_cross_and_castle_hunt(),
+                places.train_tracks_on_rittiman_rd(),
             ],
         };
 
@@ -122,13 +122,13 @@ async fn start() -> GeneralResult {
         // Serialize into json, save to database
         // Wait until _:35pm
         let req = RouteDataRequest {
-            origin: places.randolph_park_and_ride().clone(),
-            destination: places.fm78_heb().clone(),
+            origin: places.randolph_park_and_ride(),
+            destination: places.fm78_heb(),
             intermediates: vec![
-                places.walzem_and_mordred().clone(),
-                places.midcrown_ed_white().clone(),
-                places.castle_cross_and_castle_hunt().clone(),
-                places.train_tracks_on_rittiman_rd().clone(),
+                places.walzem_and_mordred(),
+                places.midcrown_ed_white(),
+                places.castle_cross_and_castle_hunt(),
+                places.train_tracks_on_rittiman_rd(),
             ],
         };
 
@@ -141,9 +141,9 @@ async fn start() -> GeneralResult {
         // Send request, get response
         // Serialize into json, save to database
         let req = RouteDataRequest {
-            origin: places.castle_cross_and_castle_hunt().clone(),
-            destination: places.fm78_heb().clone(),
-            intermediates: vec![places.train_tracks_on_rittiman_rd().clone()],
+            origin: places.castle_cross_and_castle_hunt(),
+            destination: places.fm78_heb(),
+            intermediates: vec![places.train_tracks_on_rittiman_rd()],
         };
 
         let response = svc.compute_routes(req).await?;
@@ -157,12 +157,14 @@ async fn start() -> GeneralResult {
         .unwrap()
         .and_hms_opt(13, 0, 0)
         .unwrap();
-    scheduler.start();
-    scheduler.add_job(
-        job,
-        every_day_starting_from_school,
-        Some(job_scheduler::Limit::EndDate(october_15th)),
-    );
+    scheduler.start().await;
+    let _ = scheduler
+        .schedule(
+            every_day_starting_from_school,
+            Some(Limit::EndDate(october_15th)),
+            job,
+        )
+        .await;
 
     // Shutdown listeners
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -177,7 +179,7 @@ async fn start() -> GeneralResult {
     });
 
     let _ = rx.await;
-    scheduler.stop();
+    scheduler.shutdown().await;
 
     Ok(())
 }

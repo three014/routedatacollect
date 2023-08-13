@@ -93,10 +93,10 @@ impl Date {
         start_year: u32,
     ) -> Option<NaiveDate> {
         self.months.reset();
-        let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
         let mut found = false;
         let mut first_run = true;
         let mut result = None;
+        let mut days_of_the_month = CopyRing::owned(crate::MONTH_TO_DAYS_NO_LEAP);
         while !found && !self.at_year_limit(start_year) {
             // Step 1: Set the months to the first available month
             let (month, year_overflow) = if first_run {
@@ -118,7 +118,7 @@ impl Date {
             if month != start_month || self.year_unchecked() != start_year {
                 // Calculate the number of days that have passed from the
                 // last day/month/year.
-                let mut days_of_the_month = CopyRing::borrowed(&months_to_days_no_leap);
+                days_of_the_month.reset();
                 days_of_the_month.rotate_left(start_month.into()); // Puts us on the month after, not the current month.
 
                 // We want to calculate the number of days from the open range of the first month
@@ -175,57 +175,23 @@ impl Date {
             // Step 3: Find the next available day for each type.
             //         The result will be based on which types the
             //         Days struct has.
-            let days_in_this_month = Self::days_in_month(month, self.year_unchecked());
-            let next_day = self.days.first_after(
-                time_overflow,
-                start_days_month,
-                start_days_week,
-                days_in_this_month,
-            );
-            let next_day = next_day
-                .inspect_week(|w| {
-                    if let Some(&(month_day, weekday)) = w.as_ref() {
-                        let year = self.year_unchecked();
-                        self.days.set_cache(DayCache {
-                            month_day,
-                            weekday,
-                            month,
-                            year,
-                            last: LastUsed::Week,
-                        })
-                    }
-                })
-                .map_week(|d| d.map(|(day, _)| day))
-                .map(
-                    |m| m.map(|m| (m, LastUsed::Month)),
-                    |w| w.map(|w| (w, LastUsed::Week)),
+            let next_day = {
+                let year = self.year_unchecked();
+                self.days.first_after(
+                    time_overflow,
+                    start_days_month,
+                    start_days_week,
+                    month,
+                    year,
                 )
-                .try_merge(|m, w| {
-                    date::Response::new(m, w)
-                        .try_merge(|m, w| match m.0.cmp(&w.0) {
-                            std::cmp::Ordering::Less => m,
-                            std::cmp::Ordering::Equal => (m.0, LastUsed::Both),
-                            std::cmp::Ordering::Greater => w,
-                        })
-                        .or()
-                })
-                .or()
-                .expect("at least one field (month or week) to exist");
+            };
 
-            if let Some((next, winner)) = next_day {
+            if let Some(next) = next_day {
                 result = Some(Cache {
                     day: next,
                     month,
                     year: self.year_unchecked(),
                 });
-                // Note: It is possible, during all this hacking together code, that
-                // I forget to set the cache earlier, but because of how the cache
-                // is implemented right now, we can't check if it exists at the moment.
-                // So this serves as a reminder that if something doesn't work, check if
-                // the cache was set first.
-                if let Some(cache) = self.days.cache_mut() {
-                    cache.last = winner;
-                }
                 found = true;
             } else {
                 first_run = false;
@@ -235,7 +201,7 @@ impl Date {
         result.and_then(|d| NaiveDate::from_ymd_opt(d.year as i32, d.month as u32, d.day as u32))
     }
 
-    fn days_in_month(month: u8, year: u32) -> u8 {
+    pub(self) fn days_in_month(month: u8, year: u32) -> u8 {
         let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
         let mut days_in_this_month = months_to_days_no_leap[(month - 1) as usize];
         if month == 2 && crate::is_leap_year(year) {
@@ -324,23 +290,6 @@ impl Date {
                 // first, then try it here if it works.
 
                 let next_day = self.days.next(Self::days_in_month(cache.month, cache.year));
-                let _next_day = next_day
-                    .inspect_week(|w| {
-                        if let Some(&(month_day, weekday)) = w.as_ref() {
-                            self.days.set_cache(DayCache {
-                                month_day,
-                                weekday,
-                                month: cache.month,
-                                year: cache.year,
-                                last: LastUsed::Week,
-                            })
-                        }
-                    })
-                    .map_week(|w| w.map(|(day, _)| day))
-                    .map(
-                        |m| m.map(|m| (m, LastUsed::Month)),
-                        |w| w.map(|w| (w, LastUsed::Week)),
-                    );
             }
             result
         } else {

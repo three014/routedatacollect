@@ -210,3 +210,8 @@ const fn is_leap_year(year: u32) -> bool {
         false
     }
 }
+
+// TODO: Test this please
+const fn fast_leap_year_check(year: u32) -> bool {
+    !((year & 3) != 0 || (year & 15) != 0 && (year % 25) == 0)
+}
