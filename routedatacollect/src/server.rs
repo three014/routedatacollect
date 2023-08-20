@@ -13,6 +13,7 @@ mod api_interceptor;
 mod cache;
 mod data_types;
 mod db;
+#[allow(non_snake_case)]
 mod google;
 
 pub type GeneralResult = Result<(), Box<dyn std::error::Error>>;
@@ -83,14 +84,12 @@ impl<'a: 'b, 'b> RouteDataService<'a> {
             .compute_routes(request)
             .await
             .map_err(Error::Rpc)?;
-        match SerializableRouteResponse::try_from_response_with_orig_and_dest(
+        SerializableRouteResponse::try_from_response_with_orig_and_dest(
             origin,
             destination,
             response,
-        ) {
-            Ok(response) => Ok(response),
-            Err(e) => Err(Error::Rpc(tonic::Status::not_found(e))),
-        }
+        )
+        .map_err(|e| Error::Rpc(tonic::Status::not_found(e)))
     }
 
     pub async fn save_to_db(

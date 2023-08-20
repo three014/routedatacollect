@@ -93,11 +93,10 @@ impl Date {
         start_year: u32,
     ) -> Option<NaiveDate> {
         self.months.reset();
-        let mut found = false;
         let mut first_run = true;
-        let mut result = None;
+        let mut date = None;
         let mut days_of_the_month = CopyRing::owned(crate::MONTH_TO_DAYS_NO_LEAP);
-        while !found && !self.at_year_limit(start_year) {
+        while date.is_none() && !self.at_year_limit(start_year) {
             // Step 1: Set the months to the first available month
             let (month, year_overflow) = if first_run {
                 self.months.first_after(start_month)
@@ -187,18 +186,17 @@ impl Date {
             };
 
             if let Some(next) = next_day {
-                result = Some(Cache {
+                date = Some(Cache {
                     day: next,
                     month,
                     year: self.year_unchecked(),
                 });
-                found = true;
             } else {
                 first_run = false;
             };
         }
 
-        result.and_then(|d| NaiveDate::from_ymd_opt(d.year as i32, d.month as u32, d.day as u32))
+        date.and_then(|d| NaiveDate::from_ymd_opt(d.year as i32, d.month as u32, d.day as u32))
     }
 
     pub(self) fn days_in_month(month: u8, year: u32) -> u8 {
@@ -256,9 +254,8 @@ impl Date {
             year: self.year_unchecked(),
         };
         let result = if time_overflow {
-            let mut found = false;
-            let mut result = None;
-            while !found && !self.at_year_limit(cache.year) {
+            let mut date = None;
+            while date.is_none() && !self.at_year_limit(cache.year) {
                 // Get the next day (and weekday!)
 
                 // Check if those days are within bounds.
@@ -291,7 +288,7 @@ impl Date {
 
                 let next_day = self.days.next(Self::days_in_month(cache.month, cache.year));
             }
-            result
+            date
         } else {
             Some(cache)
         };
