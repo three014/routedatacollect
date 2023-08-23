@@ -1,35 +1,35 @@
 use super::Schedule;
-use chrono::{DateTime, TimeZone};
+use chrono::{DateTime, TimeZone, Utc};
 
-pub struct ScheduleIter<'a, Tz: TimeZone> {
+pub struct ScheduleIter<'a, Tz: TimeZone + 'static> {
     schedule: &'a mut Schedule,
+    timezone: Tz,
     next: Option<DateTime<Tz>>,
 }
 
-pub struct OwnedScheduleIter<Tz: TimeZone> {
+pub struct OwnedScheduleIter<Tz: TimeZone + 'static> {
     schedule: Schedule,
+    timezone: Tz,
     next: Option<DateTime<Tz>>,
 }
 
-impl<'a, Tz: TimeZone> ScheduleIter<'a, Tz> {
-    pub fn new(schedule: &'a mut Schedule, next: Option<DateTime<Tz>>) -> Self {
-        Self { schedule, next }
+impl<'a, Tz: TimeZone + 'static> ScheduleIter<'a, Tz> {
+    pub fn new(schedule: &'a mut Schedule, timezone: Tz) -> Self {
+        Self {
+            schedule,
+            timezone,
+            next: None,
+        }
     }
 }
 
-impl<Tz: TimeZone> OwnedScheduleIter<Tz> {
-    pub fn new(schedule: Schedule, next: Option<DateTime<Tz>>) -> Self {
-        Self { schedule, next }
-    }
-}
-
-impl<'a, Tz: TimeZone + 'static> Iterator for ScheduleIter<'a, Tz> {
-    type Item = DateTime<Tz>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let now = self.next.take()?;
-        self.next = self.schedule.next(&now.timezone());
-        Some(now)
+impl<Tz: TimeZone + 'static> OwnedScheduleIter<Tz> {
+    pub fn new(schedule: Schedule, timezone: Tz) -> Self {
+        Self {
+            schedule,
+            timezone,
+            next: None,
+        }
     }
 }
 
@@ -37,8 +37,20 @@ impl<Tz: TimeZone + 'static> Iterator for OwnedScheduleIter<Tz> {
     type Item = DateTime<Tz>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let now = self.next.take()?;
-        self.next = self.schedule.next(&now.timezone());
-        Some(now)
+        let when = self
+            .next
+            .get_or_insert_with(|| Utc::now().with_timezone(&self.timezone));
+        self.schedule.after(when)
+    }
+}
+
+impl<'a, Tz: TimeZone + 'static> Iterator for ScheduleIter<'a, Tz> {
+    type Item = DateTime<Tz>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let when = self
+            .next
+            .get_or_insert_with(|| Utc::now().with_timezone(&self.timezone));
+        self.schedule.after(when)
     }
 }

@@ -1,11 +1,10 @@
 use self::{
-    date::{DayCache, Days, DaysInner, Months},
+    date::{Days, DaysInner, Months},
     time::{Hours, Minutes, Seconds},
 };
 use super::{CronRing, Error};
 use crate::CopyRing;
 use chrono::{NaiveDate, NaiveTime};
-use date::LastUsed;
 
 mod date;
 mod time;
@@ -18,7 +17,7 @@ fn next(ring: &mut CronRing, overflow: bool) -> (u8, bool) {
     }
 }
 
-fn first_after(ring: &mut CronRing, overflow: bool, then: u8) -> (u8, bool) {
+fn after(ring: &mut CronRing, overflow: bool, then: u8) -> (u8, bool) {
     // let found = ring.until_start().find(|&now| cmp_fn(now, then));
     let found = ring
         .binary_search_or_greater(&(then + overflow as u8))
@@ -84,7 +83,7 @@ impl Date {
         self.year.as_mut()
     }
 
-    pub fn first_after(
+    pub fn after(
         &mut self,
         mut time_overflow: bool,
         start_days_month: u8,
@@ -240,64 +239,6 @@ impl Date {
             .unwrap_or_default()
     }
 
-    /// # Panic
-    /// Will panic if called before `Date::first_after`, since the
-    /// `year` will not have been set, and this function uses that
-    /// field.
-    pub fn next(&mut self, time_overflow: bool) -> Option<NaiveDate> {
-        // The actual first: Check if there's overflow.
-        // If there isn't, then we just return the current date again,
-        // No calculations necessary.
-        let cache = Cache {
-            day: self.days.last(),
-            month: self.months.last(),
-            year: self.year_unchecked(),
-        };
-        let result = if time_overflow {
-            let mut date = None;
-            while date.is_none() && !self.at_year_limit(cache.year) {
-                // Get the next day (and weekday!)
-
-                // Check if those days are within bounds.
-                // If both days are not, then we need
-                // to advance the month ring, then
-                // recalculate the next weekday and
-                // use the first_after function like
-                // we did last time.
-
-                // If only the weekday was outta bounds,
-                // then we calculate that weekday's month-day,
-                // month, and year. But also, in this case
-                // the month-ring wins, and we go with that
-                // date.
-                // However, in this case, we gotta look at
-                // the next time we calculate the dates.
-                //
-                // Next time, if we need to calculate
-                // the next weekday because of
-                // out-of-bounds-ness, then we need
-                // to use the cached data from our
-                // weekday's last day.
-                // That way, we actually shouldn't have
-                // to calculate the weekday for the
-                // month-ring at all.
-                //
-                // [7/2] I'm going to try implementing
-                // this for the first_after function
-                // first, then try it here if it works.
-
-                let next_day = self.days.next(Self::days_in_month(cache.month, cache.year));
-            }
-            date
-        } else {
-            Some(cache)
-        };
-
-        result.and_then(|date| {
-            NaiveDate::from_ymd_opt(date.year as i32, date.month as u32, date.day as u32)
-        })
-    }
-
     /// Returns the current year.
     ///
     /// # Panic
@@ -308,18 +249,10 @@ impl Date {
 }
 
 impl Time {
-    pub fn first_after(&mut self, sec: u8, min: u8, hour: u8) -> Option<(NaiveTime, bool)> {
-        let (sec, overflow) = self.secs.first_after(sec);
-        let (min, overflow) = self.mins.first_after(min, overflow);
-        let (hour, overflow) = self.hours.first_after(hour, overflow);
-        let time = NaiveTime::from_hms_opt(hour as u32, min as u32, sec as u32)?;
-        Some((time, overflow))
-    }
-
-    pub fn next(&mut self) -> Option<(NaiveTime, bool)> {
-        let (sec, overflow) = self.secs.next();
-        let (min, overflow) = self.mins.next(overflow);
-        let (hour, overflow) = self.hours.next(overflow);
+    pub fn after(&mut self, sec: u8, min: u8, hour: u8) -> Option<(NaiveTime, bool)> {
+        let (sec, overflow) = self.secs.after(sec);
+        let (min, overflow) = self.mins.after(min, overflow);
+        let (hour, overflow) = self.hours.after(hour, overflow);
         let time = NaiveTime::from_hms_opt(hour as u32, min as u32, sec as u32)?;
         Some((time, overflow))
     }
@@ -331,23 +264,8 @@ impl DateBuilder {
         self
     }
 
-    pub fn with_days_week_iter(&mut self, weekdays: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.days_week = Some(CopyRing::arc_with_size(weekdays.into_iter().collect()));
-        self
-    }
-
     pub fn with_days_month(&mut self, month_days: CronRing) -> &mut Self {
         self.days_month = Some(month_days);
-        self
-    }
-
-    pub fn with_days_month_iter(&mut self, month_days: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.days_month = Some(CopyRing::arc_with_size(month_days.into_iter().collect()));
-        self
-    }
-
-    pub fn with_months_iter(&mut self, months: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.months = Some(CopyRing::arc_with_size(months.into_iter().collect()));
         self
     }
 
@@ -390,28 +308,13 @@ impl DateBuilder {
 }
 
 impl TimeBuilder {
-    pub fn with_secs_iter(&mut self, secs: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.secs = Some(CopyRing::arc_with_size(secs.into_iter().collect()));
-        self
-    }
-
     pub fn with_secs(&mut self, secs: CronRing) -> &mut Self {
         self.secs = Some(secs);
         self
     }
 
-    pub fn with_mins_iter(&mut self, mins: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.mins = Some(CopyRing::arc_with_size(mins.into_iter().collect()));
-        self
-    }
-
     pub fn with_mins(&mut self, mins: CronRing) -> &mut Self {
         self.mins = Some(mins);
-        self
-    }
-
-    pub fn with_hours_iter(&mut self, hours: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.hours = Some(CopyRing::arc_with_size(hours.into_iter().collect()));
         self
     }
 
@@ -461,7 +364,7 @@ mod test {
         };
 
         let then = Utc::now();
-        let f = d.first_after(false, 24, 6, 6, 2024);
+        let f = d.after(false, 24, 6, 6, 2024);
         let now = Utc::now();
         println!("{:?}", now - then);
         if let Some(f) = f {
@@ -485,7 +388,7 @@ mod test {
             year: None,
         };
 
-        let f = d.first_after(true, 30, 6, 12, 2023);
+        let f = d.after(true, 30, 6, 12, 2023);
         if let Some(f) = f {
             dbg!(f);
         } else {
@@ -508,7 +411,7 @@ mod test {
             year: None,
         };
 
-        let f = d.first_after(true, 25, 0, 6, 2023);
+        let f = d.after(true, 25, 0, 6, 2023);
         if let Some(f) = f {
             dbg!(f);
         } else {
@@ -528,7 +431,7 @@ mod test {
             year: None,
         };
 
-        let f = d.first_after(true, 30, 6, 12, 2024);
+        let f = d.after(true, 30, 6, 12, 2024);
         if let Some(f) = f {
             dbg!(f);
         } else {
@@ -548,7 +451,7 @@ mod test {
         };
         let then = Utc::now();
         for _ in 0..1000000 {
-            let _a = d.first_after(true, 30, 6, 12, 2024);
+            let _a = d.after(true, 30, 6, 12, 2024);
         }
         let now = Utc::now();
         println!("Diff: {:?}", now - then);

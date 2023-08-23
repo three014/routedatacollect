@@ -453,7 +453,7 @@ impl Months {
     }
 
     pub fn first_after(&mut self, month: u8) -> (u8, bool) {
-        super::first_after(&mut self.0, false, month)
+        super::after(&mut self.0, false, month)
     }
 
     pub fn next(&mut self) -> (u8, bool) {

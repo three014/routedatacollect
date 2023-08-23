@@ -23,18 +23,9 @@ impl Seconds {
     ///
     /// Otherwise, the bool is `false` and no overflow
     /// has occurred.
-    pub fn first_after(&mut self, sec: u8) -> (u8, bool) {
+    pub fn after(&mut self, sec: u8) -> (u8, bool) {
         self.0.reset();
-        super::first_after(&mut self.0, false, sec)
-    }
-
-    /// Returns the next second in the inner
-    /// buffer, along with whether overflow
-    /// occurred. For seconds, overflow
-    /// occurs when the seconds passes 59
-    /// and wraps back to 0.
-    pub fn next(&mut self) -> (u8, bool) {
-        self.0.checked_next().unwrap()
+        super::after(&mut self.0, false, sec)
     }
 }
 
@@ -52,18 +43,9 @@ impl Minutes {
     ///
     /// Otherwise, the bool is `false` and no overflow
     /// has occurred.
-    pub fn first_after(&mut self, min: u8, sec_overflow: bool) -> (u8, bool) {
+    pub fn after(&mut self, min: u8, sec_overflow: bool) -> (u8, bool) {
         self.0.reset();
-        super::first_after(&mut self.0, sec_overflow, min)
-    }
-
-    /// Returns the next minute in the inner
-    /// buffer, along with whether overflow
-    /// occurred. For minutes, overflow
-    /// occurs when the minutes passes 59
-    /// and wraps back to 0.
-    pub fn next(&mut self, sec_overflow: bool) -> (u8, bool) {
-        super::next(&mut self.0, sec_overflow)
+        super::after(&mut self.0, sec_overflow, min)
     }
 }
 
@@ -73,27 +55,18 @@ impl Hours {
     }
 
     /// Returns the first hour that occurs after the given
-    /// number of hours. Rotates the inner buffer so that
-    /// calling `next` yields the following value.
+    /// number of hours. 
     ///
     /// If the inner buffer wrapped back to the earliest hour,
     /// then overflow has occurred and the bool is `true`.
     ///
     /// Otherwise, the bool is `false` and no overflow
     /// has occurred.
-    pub fn first_after(&mut self, hr: u8, min_overflow: bool) -> (u8, bool) {
+    pub fn after(&mut self, hr: u8, min_overflow: bool) -> (u8, bool) {
         self.0.reset();
-        super::first_after(&mut self.0, min_overflow, hr)
+        super::after(&mut self.0, min_overflow, hr)
     }
 
-    /// Returns the next hour in the inner
-    /// buffer, along with whether overflow
-    /// occurred. For hours, overflow
-    /// occurs when the hours passes 23
-    /// and wraps back to 0.
-    pub fn next(&mut self, min_overflow: bool) -> (u8, bool) {
-        super::next(&mut self.0, min_overflow)
-    }
 }
 
 #[cfg(test)]
@@ -140,21 +113,11 @@ mod test {
             Seconds::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
         let now = Utc::now();
 
-        let next = seconds.first_after(now.second() as u8);
+        let next = seconds.after(now.second() as u8);
         match next.1 {
             true => assert!((next.0 as u32) < now.second()),
             false => assert!((next.0 as u32) >= now.second()),
         }
-    }
-
-    #[test]
-    fn next_for_seconds() {
-        let mut secs = Seconds::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
-        let mut rng = rand::thread_rng();
-        let s = rng.gen::<u8>() % 60;
-        let first = secs.first_after(s);
-        eprintln!("First after {} seconds: {:?}", s, first);
-        dbg!(secs.next());
     }
 
     #[test]
@@ -163,7 +126,7 @@ mod test {
             Minutes::new(CopyRing::arc_with_size(gen_range_mins_or_secs().into()));
         let now = Utc::now();
 
-        let next = minutes.first_after(now.minute() as u8, false);
+        let next = minutes.after(now.minute() as u8, false);
         match next.1 {
             true => assert!((next.0 as u32) < now.minute()),
             false => assert!((next.0 as u32) >= now.minute()),
@@ -177,7 +140,7 @@ mod test {
         for i in 0..60 {
             let now2 = i;
 
-            let next = minutes.first_after(now2, true);
+            let next = minutes.after(now2, true);
             //eprintln!("now: {} minutes", now2);
             //dbg!(next);
             //dbg!(&minutes);
@@ -194,7 +157,7 @@ mod test {
         for i in 0..24 {
             let now2 = i;
 
-            let next = hours.first_after(now2, true);
+            let next = hours.after(now2, true);
             //eprintln!("now: {} hours", now2);
             //dbg!(next);
             //dbg!(&hours);

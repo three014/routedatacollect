@@ -1,7 +1,7 @@
 use crate::CopyRing;
 
 use self::fields::{Date, DateBuilder, Time, TimeBuilder};
-use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Timelike};
+use chrono::{Datelike, NaiveDateTime, Timelike};
 
 pub type CronRing = CopyRing<'static, u8, 1>;
 
@@ -95,28 +95,13 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn with_secs_iter(&mut self, secs: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.time.with_secs_iter(secs);
-        self
-    }
-
     pub fn with_secs(&mut self, secs: CronRing) -> &mut Self {
         self.time.with_secs(secs);
         self
     }
 
-    pub fn with_mins_iter(&mut self, mins: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.time.with_mins_iter(mins);
-        self
-    }
-
     pub fn with_mins(&mut self, mins: CronRing) -> &mut Self {
         self.time.with_mins(mins);
-        self
-    }
-
-    pub fn with_hours_iter(&mut self, hours: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.time.with_hours_iter(hours);
         self
     }
 
@@ -130,23 +115,8 @@ impl Builder {
         self
     }
 
-    pub fn with_days_week_iter(&mut self, weekdays: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.date.with_days_week_iter(weekdays);
-        self
-    }
-
     pub fn with_days_month(&mut self, month_days: CronRing) -> &mut Self {
         self.date.with_days_month(month_days);
-        self
-    }
-
-    pub fn with_days_month_iter(&mut self, month_days: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.date.with_days_month_iter(month_days);
-        self
-    }
-
-    pub fn with_months_iter(&mut self, months: impl IntoIterator<Item = u8>) -> &mut Self {
-        self.date.with_months_iter(months);
         self
     }
 
@@ -177,16 +147,16 @@ impl Builder {
 }
 
 impl FieldTable {
-    pub fn after<Tz: TimeZone + 'static>(
+    pub fn after(
         &mut self,
-        date_time: &DateTime<Tz>,
+        date_time: &NaiveDateTime,
     ) -> Option<NaiveDateTime> {
-        let (time, overflow) = self.time.first_after(
+        let (time, overflow) = self.time.after(
             date_time.second() as u8,
             date_time.minute() as u8,
             date_time.hour() as u8,
         )?;
-        let date = self.date.first_after(
+        let date = self.date.after(
             overflow,
             date_time.day() as u8,
             date_time.weekday().num_days_from_sunday() as u8,
@@ -195,16 +165,6 @@ impl FieldTable {
         )?;
 
         Some(date.and_time(time))
-        // NaiveDate::from_ymd_opt(year, month as u32, day as u32)
-        //     .and_then(|date| date.and_hms_opt(hour as u32, min as u32, sec as u32))
-    }
-
-    pub fn next(&mut self) -> Option<NaiveDateTime> {
-        let (time, overflow) = self.time.next()?;
-        let date = self.date.next(overflow)?;
-        Some(date.and_time(time))
-        // NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
-        //     .and_then(|date| date.and_hms_opt(hour as u32, min as u32, sec as u32))
     }
 
     pub fn builder() -> Builder {
