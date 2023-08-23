@@ -7,20 +7,20 @@ edition = "2021"
 
 [dependencies]
 prost = { version = "0.11.9", features = ["prost-derive"] }
-tokio = { version = "1.28.0", features = ["rt", "rt-multi-thread", "signal", "sync", "parking_lot"] }
+tokio = { version = "1.32.0", features = ["rt", "rt-multi-thread", "signal", "sync", "parking_lot"] }
 tonic = { version = "0.9.2", features = ["transport", "channel", "codegen", "tls", "tls-roots", "tls-webpki-roots", "prost", "gzip"] }
-serde = { version = "1.0.160", features = ["derive"] }
+serde = { version = "1.0.185", features = ["derive"] }
 prost-types = "0.11.9"
 env_logger = "0.10.0"
 log = "0.4.17"
 serde_json = "1.0.96"
 futures = "0.3.28"
 job_scheduler = { path = "../job_scheduler" }
-chrono = "0.4.24"
+chrono = "0.4.26"
 cron = "0.12.0"
 http-body = "0.4.5"
 chrono-tz = "0.8.2"
-mongodb = "2.5.0"
+mongodb = "2.6.1"
 bson = { version = "2.6.1", features = ["chrono-0_4"] }
 
 [build-dependencies]
