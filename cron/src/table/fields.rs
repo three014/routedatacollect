@@ -146,7 +146,7 @@ impl Date {
                 // the years within the open range. Because of that, this might not enter
                 // the loop at all if the years are the same. We'll come back to this later.
                 let leap_days = ((start_year + 1)..self.year_unchecked())
-                    .filter(|&year| crate::is_leap_year(year))
+                    .filter(|&year| crate::fast_leap_year_check(year))
                     .count();
 
                 let first_month_days = {
@@ -201,7 +201,7 @@ impl Date {
     pub(self) fn days_in_month(month: u8, year: u32) -> u8 {
         let months_to_days_no_leap = crate::MONTH_TO_DAYS_NO_LEAP;
         let mut days_in_this_month = months_to_days_no_leap[(month - 1) as usize];
-        if month == 2 && crate::is_leap_year(year) {
+        if month == 2 && crate::fast_leap_year_check(year) {
             days_in_this_month += 1;
         }
         days_in_this_month

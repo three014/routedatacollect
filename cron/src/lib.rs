@@ -3,12 +3,12 @@ pub use collection::iter::CycleIterMut;
 pub use error::ParseError;
 pub use schedule::Schedule;
 
-static DEFAULT_SECONDS: [u8; 60] = [
+static _DEFAULT_SECONDS: [u8; 60] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
 ];
-static DEFAULT_MINUTES: [u8; 60] = [
+static _DEFAULT_MINUTES: [u8; 60] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
@@ -16,7 +16,7 @@ static DEFAULT_MINUTES: [u8; 60] = [
 static DEFAULT_HOURS: [u8; 24] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
 ];
-static DEFAULT_DAYS_WEEK: [u8; 7] = [0, 1, 2, 3, 4, 5, 6];
+static _DEFAULT_DAYS_WEEK: [u8; 7] = [0, 1, 2, 3, 4, 5, 6];
 static DEFAULT_DAYS_MONTH: [u8; 31] = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     27, 28, 29, 30, 31,
@@ -34,10 +34,13 @@ mod error {
         InvalidMacro,
         Unknown,
         BelowRange,
+        BadEnd,
         AboveRange,
         DuplicateValue,
         IntervalWithoutWildcard,
         IntervalAndMultiple,
+        InvalidToken,
+        InvalidSyntax,
         Build(BuildError),
     }
 }
@@ -60,12 +63,18 @@ mod schedule {
     }
 
     impl Schedule {
-        pub fn after<Tz: TimeZone + 'static>(&mut self, when: &DateTime<Tz>) -> Option<DateTime<Tz>> {
+        pub fn after<Tz: TimeZone + 'static>(
+            &mut self,
+            when: &DateTime<Tz>,
+        ) -> Option<DateTime<Tz>> {
             let first = self.fields.after(&when.naive_local());
             first.and_then(|dt| dt.and_local_timezone(when.timezone()).earliest())
         }
 
-        pub fn into_iter_with_tz<Tz: TimeZone + 'static>(self, timezone: Tz) -> OwnedScheduleIter<Tz> {
+        pub fn into_iter_with_tz<Tz: TimeZone + 'static>(
+            self,
+            timezone: Tz,
+        ) -> OwnedScheduleIter<Tz> {
             OwnedScheduleIter::new(self, timezone)
         }
 
@@ -130,7 +139,6 @@ mod schedule {
         }
     }
 
-
     fn hourly() -> FieldTable {
         FieldTable::builder()
             .with_secs(CopyRing::from(0))
@@ -189,7 +197,6 @@ mod schedule {
     #[cfg(test)]
     mod tests {
         use crate::Schedule;
-        use chrono::Utc;
         use std::{
             sync::{Arc, Mutex},
             thread,
@@ -205,6 +212,7 @@ mod schedule {
     }
 }
 
+#[allow(unused)]
 const fn is_leap_year(year: u32) -> bool {
     if year % 4 == 0 {
         if year % 100 == 0 {
@@ -220,4 +228,18 @@ const fn is_leap_year(year: u32) -> bool {
 // TODO: Test this please
 const fn fast_leap_year_check(year: u32) -> bool {
     !((year & 3) != 0 || (year & 15) != 0 && (year % 25) == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::fast_leap_year_check;
+
+    #[test]
+    fn fast_leap_year_check_works() {
+        assert_eq!(fast_leap_year_check(1600), true);
+        assert_eq!(fast_leap_year_check(1800), false);
+        assert_eq!(fast_leap_year_check(2000), true);
+        assert_eq!(fast_leap_year_check(2004), true);
+        assert_eq!(fast_leap_year_check(2023), false);
+    }
 }
