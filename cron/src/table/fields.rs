@@ -417,7 +417,7 @@ mod test {
         } else {
             dbg!("Couldn't get next date");
         }
-        dbg!(d);
+        //dbg!(d);
     }
 
     #[test]

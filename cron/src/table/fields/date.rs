@@ -371,7 +371,7 @@ impl DaysInner {
         let (month_day, weekday) = day;
         if month_day > days_in_month {
             // Overflow
-            let new_day = month - days_in_month;
+            let new_day = month_day - days_in_month;
             let (new_month, month_overflow) = {
                 let new_month = month + 1;
                 if new_month > 12 {

@@ -17,15 +17,15 @@ enum Token {
 }
 
 impl Token {
-    pub fn is_valid(&self, token: &Self) -> bool {
+    pub fn is_next_valid(&self, next: &Self) -> bool {
         match self {
-            Token::Start(_) => Start::is_valid(token),
-            Token::Number(_) => Number::is_valid(token),
-            Token::Letter(_) => Letter::is_valid(token),
-            Token::Comma(_) => Comma::is_valid(token),
-            Token::Hyphen(_) => Hyphen::is_valid(token),
-            Token::Asterisk(_) => Asterisk::is_valid(token),
-            Token::Slash(_) => Slash::is_valid(token),
+            Token::Start(_) => Start::is_next_valid(next),
+            Token::Number(_) => Number::is_next_valid(next),
+            Token::Letter(_) => Letter::is_next_valid(next),
+            Token::Comma(_) => Comma::is_next_valid(next),
+            Token::Hyphen(_) => Hyphen::is_next_valid(next),
+            Token::Asterisk(_) => Asterisk::is_next_valid(next),
+            Token::Slash(_) => Slash::is_next_valid(next),
             Token::End => false, // Nothing can come after the end!!
         }
     }
@@ -42,12 +42,27 @@ impl Token {
             Token::End => usize::MAX,
         }
     }
+
+    pub fn try_from(c: char, id: usize) -> Result<Self, ParseError> {
+        let token = match &c {
+            '0'..='9' => Token::Number(Number::new(id)),
+            'a'..='z' | 'A'..='Z' => Token::Letter(Letter::new(id)),
+            ',' => Token::Comma(Comma::new(id)),
+            '/' => Token::Slash(Slash::new(id)),
+            '*' => Token::Asterisk(Asterisk::new(id)),
+            '-' => Token::Hyphen(Hyphen::new(id)),
+            _ => {
+                return Err(ParseError::InvalidToken);
+            }
+        };
+
+        Ok(token)
+    }
 }
 
 pub struct TokenStream {
     tokens: Vec<Token>,
     table: HashMap<usize, Entry>,
-    next_id: usize,
 }
 
 impl TokenStream {
@@ -55,25 +70,15 @@ impl TokenStream {
         Self {
             tokens: vec![Token::Start(Start::new(0))],
             table: HashMap::new(),
-            next_id: 1,
         }
     }
 
     pub fn tokenize(chars: CharIndices) -> Result<Self, ParseError> {
         let mut stream = Self::new();
-        for (pos, char) in chars {
-            let id = stream.next_id();
-            let token = match &char {
-                '0'..='9' => Token::Number(Number::new(id)),
-                'a'..='z' | 'A'..='Z' => Token::Letter(Letter::new(id)),
-                ',' => Token::Comma(Comma::new(id)),
-                '/' => Token::Slash(Slash::new(id)),
-                '*' => Token::Asterisk(Asterisk::new(id)),
-                '-' => Token::Hyphen(Hyphen::new(id)),
-                _ => {
-                    return Err(ParseError::InvalidToken);
-                }
-            };
+        let counter = 1..;
+
+        for ((pos, char), id) in chars.zip(counter) {
+            let token = Token::try_from(char, id)?;
 
             if stream.is_valid(&token) {
                 let already_exists = stream
@@ -88,6 +93,7 @@ impl TokenStream {
                 return Err(ParseError::InvalidToken);
             }
         }
+
         let final_token = Token::End;
         if stream.is_valid(&final_token) {
             stream.tokens.push(final_token);
@@ -103,13 +109,7 @@ impl TokenStream {
             .tokens
             .last()
             .expect("tokens should have at least the start token");
-        last.is_valid(token)
-    }
-
-    fn next_id(&mut self) -> usize {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
+        last.is_next_valid(token)
     }
 }
 
@@ -138,11 +138,11 @@ mod table {
         pub fn new(_value: char, _pos: usize) -> Self {
             Self { _value, _pos }
         }
-    
-    pub fn _value(&self) -> char {
-        self._value
+
+        pub fn _value(&self) -> char {
+            self._value
+        }
     }
-}
 }
 
 mod start {
@@ -161,8 +161,8 @@ mod start {
             self.id
         }
 
-        pub fn is_valid(token: &Token) -> bool {
-            match token {
+        pub fn is_next_valid(next: &Token) -> bool {
+            match next {
                 Token::Start(_) => false,
                 Token::Number(_) => true,
                 Token::Letter(_) => true,
@@ -192,8 +192,8 @@ mod num {
             self.id
         }
 
-        pub fn is_valid(token: &Token) -> bool {
-            match token {
+        pub fn is_next_valid(next: &Token) -> bool {
+            match next {
                 Token::Start(_) => false,
                 Token::Number(_) => true,
                 Token::Letter(_) => false,
@@ -223,8 +223,8 @@ mod letter {
             self.id
         }
 
-        pub fn is_valid(token: &Token) -> bool {
-            match token {
+        pub fn is_next_valid(next: &Token) -> bool {
+            match next {
                 Token::Start(_) => false,
                 Token::Number(_) => false,
                 Token::Letter(_) => true,
@@ -254,8 +254,8 @@ mod comma {
             self.id
         }
 
-        pub fn is_valid(token: &Token) -> bool {
-            matches!(token, Token::Number(_) | Token::Letter(_))
+        pub fn is_next_valid(next: &Token) -> bool {
+            matches!(next, Token::Number(_) | Token::Letter(_))
         }
     }
 }
@@ -276,8 +276,8 @@ mod hyphen {
             self.id
         }
 
-        pub fn is_valid(token: &Token) -> bool {
-            matches!(token, Token::Number(_) | Token::Letter(_))
+        pub fn is_next_valid(next: &Token) -> bool {
+            matches!(next, Token::Number(_) | Token::Letter(_))
         }
     }
 }
@@ -298,8 +298,8 @@ mod asterisk {
             self.id
         }
 
-        pub fn is_valid(token: &Token) -> bool {
-            matches!(token, Token::Slash(_) | Token::End)
+        pub fn is_next_valid(next: &Token) -> bool {
+            matches!(next, Token::Slash(_) | Token::End)
         }
     }
 }
@@ -320,8 +320,8 @@ mod slash {
             self.id
         }
 
-        pub fn is_valid(token: &Token) -> bool {
-            matches!(token, Token::Number(_))
+        pub fn is_next_valid(next: &Token) -> bool {
+            matches!(next, Token::Number(_))
         }
     }
 }

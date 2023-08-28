@@ -14,6 +14,21 @@ pub struct LatLng {
     #[prost(double, tag = "2")]
     pub longitude: f64,
 }
+/// Localized variant of a text in a particular language.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LocalizedText {
+    /// Localized string in the language corresponding to `language_code' below.
+    #[prost(string, tag = "1")]
+    pub text: ::prost::alloc::string::String,
+    /// The text's BCP-47 language code, such as "en-US" or "sr-Latn".
+    ///
+    /// For more information, see
+    /// <http://www.unicode.org/reports/tr35/#Unicode_locale_identifier.>
+    #[prost(string, tag = "2")]
+    pub language_code: ::prost::alloc::string::String,
+}
 /// Represents an amount of money with its currency type.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
