@@ -10,21 +10,20 @@ use std::{collections::HashSet, ops::Deref};
 
 mod ast {
     /*
-        Thoughts:
-        
-        - Does this cron subexpr need an abstract syntax tree?
-        Well, what are some possible concepts we need to note?
-            - SubExpression (root)
-            - NumberValue: Combination of Number tokens to create a number
-            - StringValue: Combination of Letter tokens to create a string
-            - MainValue: 
+       Thoughts:
 
-    
-    
-    
-     */
+       - Does this cron subexpr need an abstract syntax tree?
+       Well, what are some possible concepts we need to note?
+           - SubExpression (root)
+           - NumberValue: Combination of Number tokens to create a number
+           - StringValue: Combination of Letter tokens to create a string
+           - MainValue:
+
+
+
+
+    */
 }
-
 
 mod tokens;
 mod seconds {
